@@ -14,7 +14,7 @@ static let hotkeyPressed = Notification.Name(“hotkeyPressed”)
 }
 
 func asAXUIElement(_ object: AnyObject) -> AXUIElement? {
-// FIXED: Use conditional cast instead of force cast
+
 return CFGetTypeID(object) == AXUIElementGetTypeID() ? (object as? AXUIElement) : nil
 }
 
@@ -31,7 +31,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 var statusItem: NSStatusItem?
 
 ```
-// FIXED: Thread-safe observer management
+
 private let observersQueue = DispatchQueue(label: "com.example.Centered.observers", attributes: .concurrent)
 private var _observers = [pid_t: AXObserver]()
 private var observers: [pid_t: AXObserver] {
@@ -41,7 +41,7 @@ private var observers: [pid_t: AXObserver] {
 
 let centerHotKey = HotKey(key: .c, modifiers: [.command, .option])
 
-// FIXED: Thread-safe isEnabled flag
+
 private let stateQueue = DispatchQueue(label: "com.example.Centered.state")
 private var _isEnabled = false
 var isEnabled: Bool {
@@ -110,7 +110,7 @@ private func setupStatusItem() {
 private func updateScreenMenu() {
     let menu = NSMenu()
     
-    // FIXED: Added bounds checking for screen selection
+    
     let screens = NSScreen.screens
     guard !screens.isEmpty else {
         statusItem?.menu = menu
@@ -132,7 +132,7 @@ private func updateScreenMenu() {
 }
 
 @objc func selectScreen(_ sender: NSMenuItem) {
-    // FIXED: Added bounds checking
+    
     let screens = NSScreen.screens
     guard sender.tag >= 0, sender.tag < screens.count else { return }
     selectedScreen = screens[sender.tag]
@@ -148,13 +148,13 @@ private func cleanupObservers() {
     }
 }
 
-// FIXED: Moved animation to background thread to avoid UI blocking
+
 private func animateWindowPosition(_ window: AXUIElement, to point: CGPoint) {
     guard let currentPosValue = getWindowPosition(window) else { return }
     var currentPos = CGPoint()
     AXValueGetValue(currentPosValue, .cgPoint, &currentPos)
     
-    // Perform animation on background thread
+    
     DispatchQueue.global(qos: .userInteractive).async {
         let steps = 10
         let dx = (point.x - currentPos.x) / CGFloat(steps)
@@ -212,7 +212,7 @@ private func centerWindow(_ window: AXUIElement) -> Bool {
     var windowSize = CGSize()
     guard AXValueGetValue(size as! AXValue, .cgSize, &windowSize) else { return false }
     
-    // FIXED: Validate window dimensions to prevent off-screen windows
+    
     guard windowSize.width > 0, windowSize.height > 0,
           windowSize.width <= screen.frame.width,
           windowSize.height <= screen.frame.height else {
@@ -224,7 +224,7 @@ private func centerWindow(_ window: AXUIElement) -> Bool {
     return true
 }
 
-// FIXED: Improved AppleScript injection protection - use bundle identifier when possible
+
 private func centerWithAppleScript(bundleIdentifier: String) {
     let script = """
     tell application id "\(bundleIdentifier)"
@@ -254,13 +254,13 @@ private func centerWithAppleScript(bundleIdentifier: String) {
     var error: NSDictionary?
     let result = NSAppleScript(source: script)?.executeAndReturnError(&error)
     
-    // FIXED: Added error logging for debugging
+    
     if let error = error {
         NSLog("AppleScript error for bundle \(bundleIdentifier): \(error)")
     }
 }
 
-// FIXED: Significantly improved sanitization for app names
+
 private func centerWithAppleScript(appName: String) {
     // Comprehensive sanitization to prevent injection
     let sanitized = appName
@@ -271,7 +271,7 @@ private func centerWithAppleScript(appName: String) {
         .replacingOccurrences(of: "\t", with: "")
         .replacingOccurrences(of: "\0", with: "")
     
-    // Additional validation: reject suspicious characters
+    
     let allowedCharacterSet = CharacterSet.alphanumerics
         .union(.whitespaces)
         .union(CharacterSet(charactersIn: ".-_"))
@@ -309,7 +309,7 @@ private func centerWithAppleScript(appName: String) {
     var error: NSDictionary?
     let result = NSAppleScript(source: script)?.executeAndReturnError(&error)
     
-    // FIXED: Added error logging
+    
     if let error = error {
         NSLog("AppleScript error for app \(sanitized): \(error)")
     }
@@ -381,7 +381,7 @@ func startObservingWindows() {
 
 @objc func appTerminated(notification: Notification) {
     if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
-        // FIXED: Thread-safe observer removal
+        
         observersQueue.sync(flags: .barrier) {
             if let observer = _observers.removeValue(forKey: app.processIdentifier) {
                 CFRunLoopRemoveSource(CFRunLoopGetCurrent(), AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -391,7 +391,7 @@ func startObservingWindows() {
 }
 
 func observe(app: NSRunningApplication) {
-    // FIXED: Thread-safe observer check and addition
+    
     observersQueue.sync(flags: .barrier) {
         guard _observers[app.processIdentifier] == nil else { return }
         
