@@ -3,7 +3,6 @@
 //  Centered
 //
 //  Created by Darion McGee on 7/22/25.
-//  Security fixes applied
 //
 
 import Cocoa
@@ -20,7 +19,6 @@ NSApplication.shared.delegate as? AppDelegate
 override func viewDidLoad() {
     super.viewDidLoad()
 
-    // FIXED: Ensure UI updates happen on main thread
     DispatchQueue.main.async { [weak self] in
         self?.updateUI()
 
@@ -46,13 +44,13 @@ override func viewDidAppear() {
 }
 
 deinit {
-    // FIXED: Ensure cleanup happens properly
+    
     NotificationCenter.default.removeObserver(self, name: .appStateChanged, object: nil)
     NotificationCenter.default.removeObserver(self, name: .hotkeyPressed, object: nil)
 }
 
 @IBAction func toggleSwitchChanged(_ sender: NSSwitch) {
-    // FIXED: Better error handling and main thread guarantee
+    
     guard let appDelegate = appDelegate else { return }
     
     DispatchQueue.main.async { [weak self] in
@@ -66,7 +64,7 @@ deinit {
 }
 
 @objc private func updateUI() {
-    // FIXED: Ensure all UI updates happen on main thread with weak self
+    
     DispatchQueue.main.async { [weak self] in
         guard let self = self else { return }
         guard let enabled = self.appDelegate?.isEnabled else {
