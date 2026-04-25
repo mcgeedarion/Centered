@@ -1,91 +1,93 @@
 //
-//  ViewController.swift
-//  Centered
+// ViewController.swift
+// Centered
 //
-//  Created by Darion McGee on 7/22/25.
+// Created by Darion McGee on 7/22/25.
 //
 
 import Cocoa
 
 class ViewController: NSViewController {
-var appDelegate: AppDelegate? {
-NSApplication.shared.delegate as? AppDelegate
-}
 
-```
-@IBOutlet weak var toggleSwitch: NSSwitch!
-@IBOutlet weak var statusIndicator: NSImageView!
-
-override func viewDidLoad() {
-    super.viewDidLoad()
-
-    DispatchQueue.main.async { [weak self] in
-        self?.updateUI()
-
-        if let langCode = self?.appDelegate?.appLanguageCode {
-            print("Current language code:", langCode)
-        }
+    var appDelegate: AppDelegate? {
+        return NSApplication.shared.delegate as? AppDelegate
     }
 
-    NotificationCenter.default.addObserver(self,
-                                           selector: #selector(updateUI),
-                                           name: .appStateChanged,
-                                           object: nil)
+    @IBOutlet weak var toggleSwitch: NSSwitch!
+    @IBOutlet weak var statusIndicator: NSImageView!
 
-    NotificationCenter.default.addObserver(self,
-                                           selector: #selector(updateUI),
-                                           name: .hotkeyPressed,
-                                           object: nil)
-}
+    override func viewDidLoad() {
+        super.viewDidLoad()
 
-override func viewDidAppear() {
-    super.viewDidAppear()
-    updateUI()
-}
+        updateUI()
 
-deinit {
-    
-    NotificationCenter.default.removeObserver(self, name: .appStateChanged, object: nil)
-    NotificationCenter.default.removeObserver(self, name: .hotkeyPressed, object: nil)
-}
+        if let langCode = appDelegate?.appLanguageCode {
+            print("Current language code:", langCode)
+        }
 
-@IBAction func toggleSwitchChanged(_ sender: NSSwitch) {
-    
-    guard let appDelegate = appDelegate else { return }
-    
-    DispatchQueue.main.async { [weak self] in
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(updateUI),
+            name: .appStateChanged,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(updateUI),
+            name: .hotkeyPressed,
+            object: nil
+        )
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        updateUI()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self, name: .appStateChanged, object: nil)
+        NotificationCenter.default.removeObserver(self, name: .hotkeyPressed, object: nil)
+    }
+
+    @IBAction func toggleSwitchChanged(_ sender: NSSwitch) {
+        guard let appDelegate = appDelegate else { return }
+
         if sender.state == .on {
             appDelegate.enableApp()
         } else {
             appDelegate.disableApp()
         }
-        self?.updateUI()
-    }
-}
 
-@objc private func updateUI() {
-    
-    DispatchQueue.main.async { [weak self] in
-        guard let self = self else { return }
-        guard let enabled = self.appDelegate?.isEnabled else {
-            self.toggleSwitch.isEnabled = false
-            self.statusIndicator.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "Unknown")
-            self.statusIndicator.contentTintColor = .gray
+        updateUI()
+    }
+
+    @objc private func updateUI() {
+        guard let enabled = appDelegate?.isEnabled else {
+            toggleSwitch.isEnabled = false
+            statusIndicator.image = NSImage(
+                systemSymbolName: "circle.fill",
+                accessibilityDescription: "Unknown"
+            )
+            statusIndicator.contentTintColor = .gray
             return
         }
 
-        self.toggleSwitch.isEnabled = true
-        self.toggleSwitch.state = enabled ? .on : .off
+        toggleSwitch.isEnabled = true
+        toggleSwitch.state = enabled ? .on : .off
 
         if enabled {
-            self.statusIndicator.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "Enabled")
-            self.statusIndicator.contentTintColor = .systemGreen
+            statusIndicator.image = NSImage(
+                systemSymbolName: "circle.fill",
+                accessibilityDescription: "Enabled"
+            )
+            statusIndicator.contentTintColor = .systemGreen
         } else {
-            self.statusIndicator.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "Disabled")
-            self.statusIndicator.contentTintColor = .systemRed
+            statusIndicator.image = NSImage(
+                systemSymbolName: "circle.fill",
+                accessibilityDescription: "Disabled"
+            )
+            statusIndicator.contentTintColor = .systemRed
         }
     }
-}
-```
-
 }
