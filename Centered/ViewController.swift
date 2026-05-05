@@ -9,34 +9,22 @@ import Cocoa
 
 class ViewController: NSViewController {
 
-    var appDelegate: AppDelegate? {
-        return NSApplication.shared.delegate as? AppDelegate
+    private var appDelegate: AppDelegate? {
+        NSApplication.shared.delegate as? AppDelegate
     }
 
     @IBOutlet weak var toggleSwitch: NSSwitch!
     @IBOutlet weak var statusIndicator: NSImageView!
 
+    // MARK: - Lifecycle
+
     override func viewDidLoad() {
         super.viewDidLoad()
-
         updateUI()
-
-        // REFACTOR #9: Removed dead print(appLanguageCode) – the property no
-        // longer exists now that it is not wired to any real localization logic.
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(updateUI),
-            name: .appStateChanged,
-            object: nil
-        )
-
-        NotificationCenter.default.addObserver(
-            self,
-            selector: #selector(updateUI),
-            name: .hotkeyPressed,
-            object: nil
-        )
+        // Observe both app-state changes and hotkey fires so the UI stays in sync.
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(updateUI), name: .appStateChanged, object: nil)
+        nc.addObserver(self, selector: #selector(updateUI), name: .hotkeyPressed,   object: nil)
     }
 
     override func viewDidAppear() {
@@ -45,49 +33,43 @@ class ViewController: NSViewController {
     }
 
     deinit {
-        NotificationCenter.default.removeObserver(self, name: .appStateChanged, object: nil)
-        NotificationCenter.default.removeObserver(self, name: .hotkeyPressed, object: nil)
+        // Removes all observers registered by this instance in one call.
+        NotificationCenter.default.removeObserver(self)
     }
 
+    // MARK: - Actions
+
     @IBAction func toggleSwitchChanged(_ sender: NSSwitch) {
-        guard let appDelegate = appDelegate else { return }
-
-        if sender.state == .on {
-            appDelegate.enableApp()
-        } else {
-            appDelegate.disableApp()
-        }
-
+        guard let appDelegate else { return }
+        sender.state == .on ? appDelegate.enableApp() : appDelegate.disableApp()
         updateUI()
     }
 
-    // NotificationCenter delivers synchronously on the posting thread.
-    // Dispatching to main here guarantees AppKit controls are always
-    // updated on the correct thread regardless of who posts the notification.
+    // MARK: - UI update
+
+    // NotificationCenter may post from a background thread; always apply on main.
     @objc private func updateUI() {
-        DispatchQueue.main.async { [weak self] in
-            self?.applyUI()
-        }
+        DispatchQueue.main.async { [weak self] in self?.applyUI() }
     }
 
     private func applyUI() {
         guard let enabled = appDelegate?.isEnabled else {
             toggleSwitch.isEnabled = false
-            statusIndicator.image = NSImage(
-                systemSymbolName: "circle.fill",
-                accessibilityDescription: "Unknown"
-            )
-            statusIndicator.contentTintColor = .gray
+            setStatus(symbol: "circle.fill", description: "Unknown", color: .gray)
             return
         }
-
         toggleSwitch.isEnabled = true
-        toggleSwitch.state = enabled ? .on : .off
-
-        statusIndicator.image = NSImage(
-            systemSymbolName: "circle.fill",
-            accessibilityDescription: enabled ? "Enabled" : "Disabled"
+        toggleSwitch.state     = enabled ? .on : .off
+        setStatus(
+            symbol:      "circle.fill",
+            description: enabled ? "Enabled" : "Disabled",
+            color:       enabled ? .systemGreen : .systemRed
         )
-        statusIndicator.contentTintColor = enabled ? .systemGreen : .systemRed
+    }
+
+    private func setStatus(symbol: String, description: String, color: NSColor) {
+        statusIndicator.image = NSImage(systemSymbolName: symbol,
+                                        accessibilityDescription: description)
+        statusIndicator.contentTintColor = color
     }
 }

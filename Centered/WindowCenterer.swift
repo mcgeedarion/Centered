@@ -9,15 +9,28 @@
 import Cocoa
 import ApplicationServices
 
-// MARK: - AX casting helper
+// MARK: - AX helpers (file-private)
 
-// CODE QUALITY: Scoped to a file-private AXCast namespace instead of a broad
-// `extension AnyObject`, so the helper is not visible on every object in scope.
-enum AXCast {
-    /// Returns `object` as an `AXUIElement` iff the CF type IDs match.
-    static func toElement(_ object: AnyObject) -> AXUIElement? {
-        CFGetTypeID(object) == AXUIElementGetTypeID() ? (object as? AXUIElement) : nil
-    }
+/// Casts `object` to `AXUIElement` iff the CF type IDs match.
+private func axElement(_ object: AnyObject) -> AXUIElement? {
+    CFGetTypeID(object) == AXUIElementGetTypeID() ? (object as? AXUIElement) : nil
+}
+
+/// Reads a Bool attribute from `element`; returns `nil` on any failure.
+private func axBool(_ element: AXUIElement, attribute: String) -> Bool? {
+    var raw: AnyObject?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success
+    else { return nil }
+    return raw as? Bool
+}
+
+/// Reads a typed AXValue attribute from `element`; returns `nil` on any failure.
+private func axValue(_ element: AXUIElement, attribute: String) -> AXValue? {
+    var raw: AnyObject?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+          let value = raw, CFGetTypeID(value) == AXValueGetTypeID()
+    else { return nil }
+    return (value as! AXValue)
 }
 
 // MARK: -
@@ -44,17 +57,9 @@ final class WindowCenterer {
     /// Centers `window` on the selected (or main) screen.
     /// Silently skips minimized or non-main windows.
     func center(window: AXUIElement) {
-        var minimized: AnyObject?
-        if AXUIElementCopyAttributeValue(
-            window, kAXMinimizedAttribute as CFString, &minimized
-        ) == .success,
-           let isMinimized = minimized as? Bool, isMinimized { return }
-
-        var main: AnyObject?
-        if AXUIElementCopyAttributeValue(
-            window, kAXMainAttribute as CFString, &main
-        ) == .success,
-           let isMain = main as? Bool, !isMain { return }
+        guard axBool(window, attribute: kAXMinimizedAttribute) != true,
+              axBool(window, attribute: kAXMainAttribute)      != false
+        else { return }
 
         if !centerViaAX(window: window),
            let app = NSWorkspace.shared.frontmostApplication {
@@ -66,15 +71,11 @@ final class WindowCenterer {
     func centerFrontmost() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        var focusedWindow: AnyObject?
 
-        if AXUIElementCopyAttributeValue(
-            appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow
-        ) == .success,
-           let focused = focusedWindow,
-           let window = AXCast.toElement(focused) {
-            center(window: window)
-        } else if let window = windows(for: appElement)?.first {
+        // Prefer the focused window; fall back to the first window; then AppleScript.
+        if let window = axValue(appElement, attribute: kAXFocusedWindowAttribute)
+                            .flatMap({ axElement($0) })
+            ?? axWindows(appElement)?.first {
             center(window: window)
         } else {
             centerFrontmostWithAppleScript(app)
@@ -84,7 +85,7 @@ final class WindowCenterer {
     // MARK: - Geometry (internal for testability)
 
     /// Returns the top-left origin that centers a window of `windowSize`
-    /// within `screenRect` (should be `screen.visibleFrame`).
+    /// within `screenRect` (pass `screen.visibleFrame`).
     static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
         CGPoint(
             x: screenRect.midX - windowSize.width  / 2,
@@ -98,43 +99,33 @@ final class WindowCenterer {
                                   to end: CGPoint,
                                   step i: Int,
                                   totalSteps: Int) -> CGPoint {
-        let dx = (end.x - start.x) / CGFloat(totalSteps)
-        let dy = (end.y - start.y) / CGFloat(totalSteps)
+        let t = CGFloat(i) / CGFloat(totalSteps)
         return CGPoint(
-            x: start.x + dx * CGFloat(i),
-            y: start.y + dy * CGFloat(i)
+            x: start.x + (end.x - start.x) * t,
+            y: start.y + (end.y - start.y) * t
         )
     }
 
     // MARK: - AX centering
 
     private func centerViaAX(window: AXUIElement) -> Bool {
-        guard let screen = selectedScreen ?? NSScreen.main else { return false }
-
-        var sizeValue: AnyObject?
-        guard AXUIElementCopyAttributeValue(
-            window, kAXSizeAttribute as CFString, &sizeValue
-        ) == .success,
-              let size = sizeValue,
-              CFGetTypeID(size) == AXValueGetTypeID() else { return false }
+        guard let screen = selectedScreen ?? NSScreen.main,
+              let sizeVal = axValue(window, attribute: kAXSizeAttribute)
+        else { return false }
 
         var windowSize = CGSize()
-        guard AXValueGetValue(size as! AXValue, .cgSize, &windowSize),
+        guard AXValueGetValue(sizeVal, .cgSize, &windowSize),
               windowSize.width > 0, windowSize.height > 0 else { return false }
 
-        let target = WindowCenterer.centeredOrigin(
-            windowSize: windowSize,
-            in: screen.visibleFrame
-        )
-        animateWindowPosition(window, to: target)
+        animateWindowPosition(window, to: .centeredOrigin(of: windowSize, in: screen.visibleFrame))
         return true
     }
 
     private func animateWindowPosition(_ window: AXUIElement, to point: CGPoint) {
-        guard let currentPosValue = windowPosition(window) else { return }
+        guard let posVal = axValue(window, attribute: kAXPositionAttribute) else { return }
 
         var currentPos = CGPoint()
-        AXValueGetValue(currentPosValue, .cgPoint, &currentPos)
+        AXValueGetValue(posVal, .cgPoint, &currentPos)
 
         animationWorkItem?.cancel()
         isCentering = true
@@ -148,7 +139,6 @@ final class WindowCenterer {
                 if !workItem.isCancelled { self.isCentering = false }
                 return
             }
-
             var pos = WindowCenterer.animationPosition(
                 from: currentPos, to: point, step: i, totalSteps: steps
             )
@@ -161,26 +151,15 @@ final class WindowCenterer {
                 self.isCentering = false
             }
         }
-
         step(1)
     }
 
-    private func windowPosition(_ window: AXUIElement) -> AXValue? {
-        var posValue: AnyObject?
+    private func axWindows(_ appElement: AXUIElement) -> [AXUIElement]? {
+        var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(
-            window, kAXPositionAttribute as CFString, &posValue
-        ) == .success,
-              let value = posValue,
-              CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
-        return value as! AXValue
-    }
-
-    private func windows(for appElement: AXUIElement) -> [AXUIElement]? {
-        var windows: AnyObject?
-        guard AXUIElementCopyAttributeValue(
-            appElement, kAXWindowsAttribute as CFString, &windows
+            appElement, kAXWindowsAttribute as CFString, &raw
         ) == .success else { return nil }
-        return (windows as? [AnyObject])?.compactMap { AXCast.toElement($0) }
+        return (raw as? [AnyObject])?.compactMap { axElement($0) }
     }
 
     // MARK: - AppleScript fallback
@@ -241,5 +220,14 @@ final class WindowCenterer {
         var error: NSDictionary?
         _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
         if let error = error { NSLog("AppleScript error for \(logLabel): \(error)") }
+    }
+}
+
+// MARK: - CGPoint convenience
+
+private extension CGPoint {
+    /// Returns the origin that centers `size` within `rect`.
+    static func centeredOrigin(of size: CGSize, in rect: CGRect) -> CGPoint {
+        WindowCenterer.centeredOrigin(windowSize: size, in: rect)
     }
 }

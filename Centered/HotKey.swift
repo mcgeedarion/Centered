@@ -21,8 +21,6 @@ final class HotKey {
 
     let key: Key
     let modifiers: NSEvent.ModifierFlags
-
-    /// Called whenever the hotkey fires (both global and local contexts).
     var keyDownHandler: (() -> Void)?
 
     private var globalMonitor: Any?
@@ -42,24 +40,31 @@ final class HotKey {
         guard globalMonitor == nil, localMonitor == nil else { return }
 
         let handler: (NSEvent) -> Void = { [weak self] event in
-            guard let self else { return }
-            // Use kVK_ANSI_C directly for layout-independent comparison.
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == self.modifiers,
-                  event.keyCode == UInt16(kVK_ANSI_C) else { return }
+            guard let self,
+                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == self.modifiers,
+                  event.keyCode == UInt16(kVK_ANSI_C)
+            else { return }
             self.keyDownHandler?()
         }
 
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
         localMonitor  = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event)
-            return event
+            handler(event); return event
         }
     }
 
     func deactivate() {
-        if let m = globalMonitor { NSEvent.removeMonitor(m); globalMonitor = nil }
-        if let m = localMonitor  { NSEvent.removeMonitor(m); localMonitor  = nil }
+        removeMonitor(&globalMonitor)
+        removeMonitor(&localMonitor)
     }
 
     deinit { deactivate() }
+
+    // MARK: - Helpers
+
+    private func removeMonitor(_ monitor: inout Any?) {
+        guard let m = monitor else { return }
+        NSEvent.removeMonitor(m)
+        monitor = nil
+    }
 }

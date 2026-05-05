@@ -38,14 +38,11 @@ final class WindowObserver {
             .filter { $0.activationPolicy == .regular }
             .forEach { addObserver(for: $0) }
 
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(appLaunched),
-            name: NSWorkspace.didLaunchApplicationNotification, object: nil
-        )
-        NSWorkspace.shared.notificationCenter.addObserver(
-            self, selector: #selector(appTerminated),
-            name: NSWorkspace.didTerminateApplicationNotification, object: nil
-        )
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self, selector: #selector(appLaunched),
+                       name: NSWorkspace.didLaunchApplicationNotification,  object: nil)
+        nc.addObserver(self, selector: #selector(appTerminated),
+                       name: NSWorkspace.didTerminateApplicationNotification, object: nil)
     }
 
     func stop() {
@@ -57,21 +54,14 @@ final class WindowObserver {
         }
         guard shouldStop else { return }
 
-        NSWorkspace.shared.notificationCenter.removeObserver(
-            self, name: NSWorkspace.didLaunchApplicationNotification, object: nil
-        )
-        NSWorkspace.shared.notificationCenter.removeObserver(
-            self, name: NSWorkspace.didTerminateApplicationNotification, object: nil
-        )
+        // Remove workspace observers before tearing down AX observers so no
+        // new observers can be added while we are cleaning up.
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,   object: nil)
+        nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
         queue.sync(flags: .barrier) {
-            for observer in _observers.values {
-                CFRunLoopRemoveSource(
-                    CFRunLoopGetMain(),
-                    AXObserverGetRunLoopSource(observer),
-                    .defaultMode
-                )
-            }
+            _observers.values.forEach { removeRunLoopSource(for: $0) }
             _observers.removeAll()
         }
     }
@@ -98,35 +88,26 @@ final class WindowObserver {
         let alreadyTracked: Bool = queue.sync { _observers[pid] != nil }
         guard !alreadyTracked else { return }
 
+        // All slow AX work happens outside any lock.
         var axObserver: AXObserver?
         guard AXObserverCreate(pid, observerCallback, &axObserver) == .success,
-              let axObserver = axObserver else { return }
+              let axObserver else { return }
 
         let selfPtr    = Unmanaged.passUnretained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
 
-        for notifName in [
-            kAXWindowCreatedNotification,
-            kAXWindowDeminiaturizedNotification,
-            kAXFocusedWindowChangedNotification
-        ] {
-            AXObserverAddNotification(axObserver, appElement,
-                                      notifName as CFString, selfPtr)
+        for notifName in [kAXWindowCreatedNotification,
+                          kAXWindowDeminiaturizedNotification,
+                          kAXFocusedWindowChangedNotification] {
+            AXObserverAddNotification(axObserver, appElement, notifName as CFString, selfPtr)
         }
+        addRunLoopSource(for: axObserver)
 
-        CFRunLoopAddSource(
-            CFRunLoopGetMain(),
-            AXObserverGetRunLoopSource(axObserver),
-            .defaultMode
-        )
-
+        // Barrier write — only the dictionary mutation needs the lock.
         queue.sync(flags: .barrier) {
             guard _observers[pid] == nil else {
-                CFRunLoopRemoveSource(
-                    CFRunLoopGetMain(),
-                    AXObserverGetRunLoopSource(axObserver),
-                    .defaultMode
-                )
+                // Lost race: another call already registered this pid.
+                removeRunLoopSource(for: axObserver)
                 return
             }
             _observers[pid] = axObserver
@@ -136,13 +117,25 @@ final class WindowObserver {
     private func removeObserver(for pid: pid_t) {
         queue.sync(flags: .barrier) {
             guard let observer = _observers.removeValue(forKey: pid) else { return }
-            CFRunLoopRemoveSource(
-                CFRunLoopGetMain(),
-                AXObserverGetRunLoopSource(observer),
-                .defaultMode
-            )
+            removeRunLoopSource(for: observer)
         }
     }
+
+    // MARK: - Run-loop source helpers
+
+    private func addRunLoopSource(for observer: AXObserver) {
+        CFRunLoopAddSource(CFRunLoopGetMain(),
+                           AXObserverGetRunLoopSource(observer),
+                           .defaultMode)
+    }
+
+    private func removeRunLoopSource(for observer: AXObserver) {
+        CFRunLoopRemoveSource(CFRunLoopGetMain(),
+                              AXObserverGetRunLoopSource(observer),
+                              .defaultMode)
+    }
+
+    // MARK: - AX callback
 
     func handleWindowEvent(_ element: AXUIElement) {
         onWindowEvent?(element)
@@ -150,7 +143,7 @@ final class WindowObserver {
 }
 
 private let observerCallback: AXObserverCallback = { _, element, _, refcon in
-    guard let refcon = refcon,
+    guard let refcon,
           CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
     Unmanaged<WindowObserver>
         .fromOpaque(refcon)
