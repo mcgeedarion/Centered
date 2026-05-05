@@ -2,6 +2,8 @@
 // HotKey.swift
 // Centered
 //
+// Created by Darion McGee on 7/22/25.
+//
 // A lightweight global + local keyboard-shortcut monitor built on NSEvent.
 //
 
