@@ -2,10 +2,12 @@
 // WindowCenterer.swift
 // Centered
 //
-// Created by Darion McGee on 7/22/25.
-//
 // Owns all window-centering logic: AX attribute reads, animation, and the
 // AppleScript fallback path.  AppDelegate instantiates one and delegates to it.
+//
+// All public methods are called on the main thread (AX callbacks fire on the
+// main run loop; hotkey handler posts to main).  isCentering and
+// animationWorkItem are therefore main-thread-only and need no locking.
 //
 
 import Cocoa
@@ -27,12 +29,24 @@ private func axBool(_ element: AXUIElement, attribute: String) -> Bool? {
 }
 
 /// Reads a typed AXValue attribute from `element`; returns `nil` on any failure.
+/// NOTE: Do NOT use this for attributes that return AXUIElement (e.g. kAXFocusedWindowAttribute).
+/// Those return an element, not an AXValue, so CFGetTypeID comparison will fail.
 private func axValue(_ element: AXUIElement, attribute: String) -> AXValue? {
     var raw: AnyObject?
     guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
           let value = raw, CFGetTypeID(value) == AXValueGetTypeID()
     else { return nil }
     return (value as! AXValue)
+}
+
+/// Reads an AXUIElement attribute (e.g. kAXFocusedWindowAttribute).
+/// Distinct from axValue — AXUIElement and AXValue have different CF type IDs.
+private func axElementAttr(_ element: AXUIElement, attribute: String) -> AXUIElement? {
+    var raw: AnyObject?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+          let value = raw
+    else { return nil }
+    return axElement(value)
 }
 
 // MARK: -
@@ -49,7 +63,7 @@ final class WindowCenterer {
         set { screenQueue.sync { _selectedScreen = newValue } }
     }
 
-    // MARK: - Animation state
+    // MARK: - Animation state (main-thread only)
 
     private var animationWorkItem: DispatchWorkItem?
     private(set) var isCentering = false
@@ -58,6 +72,9 @@ final class WindowCenterer {
 
     /// Centers `window` on the selected (or main) screen.
     /// Silently skips minimized or non-main windows.
+    /// - Note: `nil` from axBool means the attribute is unreadable; we treat
+    ///   that as "not minimized" / "is main" so centering proceeds rather than
+    ///   silently no-ops for apps that don't expose these attributes.
     func center(window: AXUIElement) {
         guard axBool(window, attribute: kAXMinimizedAttribute) != true,
               axBool(window, attribute: kAXMainAttribute)      != false
@@ -74,14 +91,22 @@ final class WindowCenterer {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
 
-        // Prefer the focused window; fall back to the first window; then AppleScript.
-        if let window = axValue(appElement, attribute: kAXFocusedWindowAttribute)
-                            .flatMap({ axElement($0) })
-            ?? axWindows(appElement)?.first {
+        // FIX: kAXFocusedWindowAttribute returns an AXUIElement, not an AXValue.
+        // Use axElementAttr (not axValue) so the CF type-ID check passes.
+        if let window = axElementAttr(appElement, attribute: kAXFocusedWindowAttribute)
+                        ?? axWindows(appElement)?.first {
             center(window: window)
         } else {
             centerFrontmostWithAppleScript(app)
         }
+    }
+
+    /// Cancels any in-flight animation and resets centering state.
+    /// Call this when the app is disabled so `isCentering` doesn't stay true.
+    func cancelAnimation() {
+        animationWorkItem?.cancel()
+        animationWorkItem = nil
+        isCentering = false
     }
 
     // MARK: - Geometry (internal for testability)
@@ -96,7 +121,7 @@ final class WindowCenterer {
     }
 
     /// Returns the interpolated position at animation step `i` of `totalSteps`
-    /// between `start` and `end`.
+    /// between `start` and `end` using linear interpolation.
     static func animationPosition(from start: CGPoint,
                                   to end: CGPoint,
                                   step i: Int,
@@ -111,8 +136,8 @@ final class WindowCenterer {
     // MARK: - AX centering
 
     private func centerViaAX(window: AXUIElement) -> Bool {
-        guard let screen = selectedScreen ?? NSScreen.main,
-              let sizeVal = axValue(window, attribute: kAXSizeAttribute)
+        guard let screen   = selectedScreen ?? NSScreen.main,
+              let sizeVal  = axValue(window, attribute: kAXSizeAttribute)
         else { return false }
 
         var windowSize = CGSize()
@@ -129,6 +154,8 @@ final class WindowCenterer {
         var currentPos = CGPoint()
         AXValueGetValue(posVal, .cgPoint, &currentPos)
 
+        // Cancel in-flight animation. Always reset isCentering here so that
+        // a cancelled-but-unreplaced animation never leaves isCentering = true.
         animationWorkItem?.cancel()
         isCentering = true
 
@@ -137,8 +164,9 @@ final class WindowCenterer {
         animationWorkItem = workItem
 
         func step(_ i: Int) {
+            // FIX: set isCentering = false on *both* completion and cancellation.
             guard i <= steps, !workItem.isCancelled else {
-                if !workItem.isCancelled { self.isCentering = false }
+                self.isCentering = false
                 return
             }
             var pos = WindowCenterer.animationPosition(
@@ -161,7 +189,8 @@ final class WindowCenterer {
         guard AXUIElementCopyAttributeValue(
             appElement, kAXWindowsAttribute as CFString, &raw
         ) == .success else { return nil }
-        return (raw as? [AnyObject])?.compactMap { axElement($0) }
+        // Return [] rather than nil when the value is present but not an array.
+        return (raw as? [AnyObject])?.compactMap { axElement($0) } ?? []
     }
 
     // MARK: - AppleScript fallback
@@ -175,7 +204,9 @@ final class WindowCenterer {
         }
     }
 
-    private func centerWithAppleScript(appName: String) {
+    /// Sanitises a bare app name then delegates to the shared script runner.
+    /// Internal so the sanitisation logic can be unit-tested directly.
+    func centerWithAppleScript(appName: String) {
         let sanitized = appName
             .replacingOccurrences(of: "\n", with: "")
             .replacingOccurrences(of: "\r", with: "")
@@ -192,6 +223,22 @@ final class WindowCenterer {
         }
         executeAppleScriptCentering(appTarget: "\"\(sanitized)\"",
                                     logLabel:  "app \(sanitized)")
+    }
+
+    /// Exposed internal so tests can verify sanitised names pass/fail the
+    /// allowlist without actually running AppleScript.
+    func sanitizedAppName(_ appName: String) -> String? {
+        let sanitized = appName
+            .replacingOccurrences(of: "\n", with: "")
+            .replacingOccurrences(of: "\r", with: "")
+            .replacingOccurrences(of: "\t", with: "")
+            .replacingOccurrences(of: "\0", with: "")
+
+        let allowed = CharacterSet.alphanumerics
+            .union(.whitespaces)
+            .union(CharacterSet(charactersIn: ".-_"))
+
+        return sanitized.unicodeScalars.allSatisfy({ allowed.contains($0) }) ? sanitized : nil
     }
 
     private func executeAppleScriptCentering(appTarget: String, logLabel: String) {
@@ -228,7 +275,6 @@ final class WindowCenterer {
 // MARK: - CGPoint convenience
 
 private extension CGPoint {
-    /// Returns the origin that centers `size` within `rect`.
     static func centeredOrigin(of size: CGSize, in rect: CGRect) -> CGPoint {
         WindowCenterer.centeredOrigin(windowSize: size, in: rect)
     }

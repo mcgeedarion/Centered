@@ -2,8 +2,6 @@
 // AppDelegate.swift
 // Centered
 //
-// Created by Darion McGee on 7/22/25.
-//
 // Coordinator only: owns the status-bar item, permission checks, and the
 // enable/disable lifecycle.  All centering logic lives in WindowCenterer;
 // all AX observation lives in WindowObserver.
@@ -29,9 +27,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let centerer = WindowCenterer()
     private let observer = WindowObserver()
 
-    // CODE QUALITY: HotKey is fully configured at construction time.
-    // The handler captures centerer directly (no self cycle) so the hotkey
-    // is never in a partially-initialised state between alloc and enableApp().
     private lazy var hotKey: HotKey = {
         HotKey(key: .c, modifiers: [.command, .option]) { [weak self] in
             guard let self, self.isEnabled else { return }
@@ -114,6 +109,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isEnabled = false
         observer.stop()
         hotKey.deactivate()
+        // FIX: cancel any in-flight animation and stop the permission timer
+        // so neither keeps running after the app is disabled.
+        centerer.cancelAnimation()
+        stopPermissionChecks()
         postStateChanged()
     }
 
@@ -192,6 +191,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         RunLoop.main.add(timer, forMode: .common)
         permissionTimer = timer
+    }
+
+    private func stopPermissionChecks() {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
     }
 
     // MARK: - Helpers
