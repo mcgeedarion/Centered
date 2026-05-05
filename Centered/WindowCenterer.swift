@@ -2,6 +2,8 @@
 // WindowCenterer.swift
 // Centered
 //
+// Created by Darion McGee on 7/22/25.
+//
 // Owns all window-centering logic: AX attribute reads, animation, and the
 // AppleScript fallback path.  AppDelegate instantiates one and delegates to it.
 //
