@@ -2,6 +2,8 @@
 // AppDelegate.swift
 // Centered
 //
+// Created by Darion McGee on 7/22/25.
+//
 // Coordinator only: owns the status-bar item, permission checks, and the
 // enable/disable lifecycle.  All centering logic lives in WindowCenterer;
 // all AX observation lives in WindowObserver.
