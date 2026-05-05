@@ -62,7 +62,16 @@ class ViewController: NSViewController {
         updateUI()
     }
 
+    // BUG FIX #4: Dispatch to main thread before touching any AppKit controls.
+    // NotificationCenter delivers synchronously on the posting thread, and
+    // AppDelegate can post from background queues (stateQueue / observersQueue).
     @objc private func updateUI() {
+        DispatchQueue.main.async { [weak self] in
+            self?.applyUI()
+        }
+    }
+
+    private func applyUI() {
         guard let enabled = appDelegate?.isEnabled else {
             toggleSwitch.isEnabled = false
             statusIndicator.image = NSImage(

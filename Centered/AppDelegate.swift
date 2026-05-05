@@ -123,7 +123,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         centerHotKey.activate()
 
-        NotificationCenter.default.post(name: .appStateChanged, object: nil)
+        // BUG FIX #4: Always post state-change notifications on the main thread
+        // so any NotificationCenter observers that touch AppKit remain thread-safe.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .appStateChanged, object: nil)
+        }
         startPermissionChecks()
     }
 
@@ -134,7 +138,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cleanupObservers()
         centerHotKey.deactivate()
 
-        NotificationCenter.default.post(name: .appStateChanged, object: nil)
+        // BUG FIX #4: Always post state-change notifications on the main thread.
+        DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .appStateChanged, object: nil)
+        }
     }
 
     // MARK: - Status Item / Menu
@@ -281,10 +288,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     kAXWindowCreatedNotification as CFString,
                     selfPtr
                 )
+                // BUG FIX #3: Replaced kAXWindowMiniaturizedNotification with
+                // kAXWindowDeminiaturizedNotification so we re-center on restore,
+                // not on minimize (where the window would be rejected anyway).
                 AXObserverAddNotification(
                     observer,
                     appElement,
-                    kAXWindowMiniaturizedNotification as CFString,
+                    kAXWindowDeminiaturizedNotification as CFString,
                     selfPtr
                 )
                 AXObserverAddNotification(
@@ -316,12 +326,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dx = (point.x - currentPos.x) / CGFloat(steps)
         let dy = (point.y - currentPos.y) / CGFloat(steps)
 
-        func step(_ i: Int, _ current: CGPoint) {
+        // BUG FIX #2: Start at i=1 and run through i==steps (inclusive) so the
+        // window lands on exactly `point` on the final frame.  Each recursive
+        // call receives the position that was actually set, avoiding any
+        // floating-point drift from repeated addition.
+        func step(_ i: Int) {
             guard i <= steps else { return }
 
-            let newX = current.x + dx
-            let newY = current.y + dy
-            var intermediate = CGPoint(x: newX, y: newY)
+            var intermediate = CGPoint(
+                x: currentPos.x + dx * CGFloat(i),
+                y: currentPos.y + dy * CGFloat(i)
+            )
 
             if let posVal = AXValueCreate(.cgPoint, &intermediate) {
                 AXUIElementSetAttributeValue(
@@ -333,12 +348,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             if i < steps {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) {
-                    step(i + 1, intermediate)
+                    step(i + 1)
                 }
             }
         }
 
-        step(1, currentPos)
+        step(1)
     }
 
     private func getWindowPosition(_ window: AXUIElement) -> AXValue? {
@@ -380,13 +395,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         if !centerWindow(window),
            let app = NSWorkspace.shared.frontmostApplication {
-            if let bundleId = app.bundleIdentifier {
-                centerWithAppleScript(bundleIdentifier: bundleId)
-            } else {
-                let safeAppName = (app.localizedName ?? "Unknown App")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                centerWithAppleScript(appName: safeAppName)
-            }
+            // BUG FIX #1: Pass the raw localizedName without any pre-escaping.
+            // centerWithAppleScript(appName:) is the sole owner of sanitization
+            // and its allowlist rejects backslashes, so pre-escaping caused
+            // legitimate app names to be flagged as malicious.
+            centerFrontmostWithAppleScript(app)
         }
     }
 
@@ -420,6 +433,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - AppleScript fallback
+
+    /// Single dispatch point for the AppleScript fallback path.
+    /// Prefers bundle-ID targeting; falls back to name-based targeting.
+    private func centerFrontmostWithAppleScript(_ app: NSRunningApplication) {
+        if let bundleId = app.bundleIdentifier {
+            centerWithAppleScript(bundleIdentifier: bundleId)
+        } else {
+            // Pass the raw name – centerWithAppleScript(appName:) owns all sanitization.
+            centerWithAppleScript(appName: app.localizedName ?? "Unknown App")
+        }
+    }
 
     private func centerWithAppleScript(bundleIdentifier: String) {
         let script = """
@@ -456,10 +480,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func centerWithAppleScript(appName: String) {
-        // Comprehensive sanitization to prevent injection
+        // BUG FIX #1: Sanitize here only – callers must NOT pre-escape the name.
+        // The allowlist (alphanumerics + whitespace + ".-_") does not include
+        // backslash, so any pre-escaped string would be incorrectly rejected.
         let sanitized = appName
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: "")
             .replacingOccurrences(of: "\r", with: "")
             .replacingOccurrences(of: "\t", with: "")
@@ -528,13 +552,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else if let window = getWindowsForApp(appElement)?.first {
             center(window: window)
         } else {
-            if let bundleId = app.bundleIdentifier {
-                centerWithAppleScript(bundleIdentifier: bundleId)
-            } else {
-                let safeAppName = (app.localizedName ?? "Unknown App")
-                    .replacingOccurrences(of: "\"", with: "\\\"")
-                centerWithAppleScript(appName: safeAppName)
-            }
+            centerFrontmostWithAppleScript(app)
         }
     }
 
