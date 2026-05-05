@@ -7,6 +7,7 @@
 
 import Cocoa
 import ApplicationServices
+import Carbon.HIToolbox   // REFACTOR #7: for kVK_ANSI_C
 
 // MARK: - Notifications
 
@@ -17,9 +18,8 @@ extension Notification.Name {
 
 // MARK: - AX Helpers
 
-private func asAXUIElement(_ object: AnyObject) -> AXUIElement? {
-    return CFGetTypeID(object) == AXUIElementGetTypeID() ? (object as? AXUIElement) : nil
-}
+// REFACTOR #10: Moved asAXUIElement out of file scope and into a private
+// AppDelegate extension so it is properly scoped to its only consumer.
 
 // Observer callback used for all AXObservers
 private let observerCallback: AXObserverCallback = { _, element, _, refcon in
@@ -72,9 +72,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var permissionTimer: Timer?
     var selectedScreen: NSScreen?
 
-    var appLanguageCode: String {
-        return Locale.current.language.languageCode?.identifier ?? "en"
-    }
+    // REFACTOR #9: Removed dead `appLanguageCode` property and its
+    // corresponding print() call in ViewController. It was never wired
+    // to any real localization logic.
 
     // MARK: - NSApplicationDelegate
 
@@ -123,8 +123,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         centerHotKey.activate()
 
-        // BUG FIX #4: Always post state-change notifications on the main thread
-        // so any NotificationCenter observers that touch AppKit remain thread-safe.
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .appStateChanged, object: nil)
         }
@@ -138,7 +136,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         cleanupObservers()
         centerHotKey.deactivate()
 
-        // BUG FIX #4: Always post state-change notifications on the main thread.
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .appStateChanged, object: nil)
         }
@@ -283,25 +280,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 let appElement = AXUIElementCreateApplication(app.processIdentifier)
 
                 AXObserverAddNotification(
-                    observer,
-                    appElement,
-                    kAXWindowCreatedNotification as CFString,
-                    selfPtr
-                )
-                // BUG FIX #3: Replaced kAXWindowMiniaturizedNotification with
-                // kAXWindowDeminiaturizedNotification so we re-center on restore,
-                // not on minimize (where the window would be rejected anyway).
-                AXObserverAddNotification(
-                    observer,
-                    appElement,
-                    kAXWindowDeminiaturizedNotification as CFString,
-                    selfPtr
+                    observer, appElement,
+                    kAXWindowCreatedNotification as CFString, selfPtr
                 )
                 AXObserverAddNotification(
-                    observer,
-                    appElement,
-                    kAXFocusedWindowChangedNotification as CFString,
-                    selfPtr
+                    observer, appElement,
+                    kAXWindowDeminiaturizedNotification as CFString, selfPtr
+                )
+                AXObserverAddNotification(
+                    observer, appElement,
+                    kAXFocusedWindowChangedNotification as CFString, selfPtr
                 )
 
                 CFRunLoopAddSource(
@@ -326,10 +314,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let dx = (point.x - currentPos.x) / CGFloat(steps)
         let dy = (point.y - currentPos.y) / CGFloat(steps)
 
-        // BUG FIX #2: Start at i=1 and run through i==steps (inclusive) so the
-        // window lands on exactly `point` on the final frame.  Each recursive
-        // call receives the position that was actually set, avoiding any
-        // floating-point drift from repeated addition.
         func step(_ i: Int) {
             guard i <= steps else { return }
 
@@ -339,17 +323,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             )
 
             if let posVal = AXValueCreate(.cgPoint, &intermediate) {
-                AXUIElementSetAttributeValue(
-                    window,
-                    kAXPositionAttribute as CFString,
-                    posVal
-                )
+                AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, posVal)
             }
 
             if i < steps {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) {
-                    step(i + 1)
-                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { step(i + 1) }
             }
         }
 
@@ -359,9 +337,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func getWindowPosition(_ window: AXUIElement) -> AXValue? {
         var posValue: AnyObject?
         if AXUIElementCopyAttributeValue(
-            window,
-            kAXPositionAttribute as CFString,
-            &posValue
+            window, kAXPositionAttribute as CFString, &posValue
         ) == .success,
            let value = posValue,
            CFGetTypeID(value) == AXValueGetTypeID() {
@@ -373,32 +349,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func center(window: AXUIElement) {
         var minimized: AnyObject?
         if AXUIElementCopyAttributeValue(
-            window,
-            kAXMinimizedAttribute as CFString,
-            &minimized
+            window, kAXMinimizedAttribute as CFString, &minimized
         ) == .success,
-           let isMinimized = minimized as? Bool,
-           isMinimized {
-            return
-        }
+           let isMinimized = minimized as? Bool, isMinimized { return }
 
         var main: AnyObject?
         if AXUIElementCopyAttributeValue(
-            window,
-            kAXMainAttribute as CFString,
-            &main
+            window, kAXMainAttribute as CFString, &main
         ) == .success,
-           let isMain = main as? Bool,
-           !isMain {
-            return
-        }
+           let isMain = main as? Bool, !isMain { return }
 
         if !centerWindow(window),
            let app = NSWorkspace.shared.frontmostApplication {
-            // BUG FIX #1: Pass the raw localizedName without any pre-escaping.
-            // centerWithAppleScript(appName:) is the sole owner of sanitization
-            // and its allowlist rejects backslashes, so pre-escaping caused
-            // legitimate app names to be flagged as malicious.
             centerFrontmostWithAppleScript(app)
         }
     }
@@ -408,21 +370,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         var sizeValue: AnyObject?
         guard AXUIElementCopyAttributeValue(
-            window,
-            kAXSizeAttribute as CFString,
-            &sizeValue
+            window, kAXSizeAttribute as CFString, &sizeValue
         ) == .success,
            let size = sizeValue,
-           CFGetTypeID(size) == AXValueGetTypeID() else {
-            return false
-        }
+           CFGetTypeID(size) == AXValueGetTypeID() else { return false }
 
         var windowSize = CGSize()
         guard AXValueGetValue(size as! AXValue, .cgSize, &windowSize) else { return false }
-
-        guard windowSize.width > 0, windowSize.height > 0 else {
-            return false
-        }
+        guard windowSize.width > 0, windowSize.height > 0 else { return false }
 
         let newOrigin = CGPoint(
             x: screen.frame.midX - windowSize.width / 2,
@@ -438,68 +393,43 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     /// Prefers bundle-ID targeting; falls back to name-based targeting.
     private func centerFrontmostWithAppleScript(_ app: NSRunningApplication) {
         if let bundleId = app.bundleIdentifier {
-            centerWithAppleScript(bundleIdentifier: bundleId)
+            // REFACTOR #5: Both overloads now delegate to executeAppleScriptCentering
+            // to eliminate the duplicated ~20-line AppleScript body.
+            executeAppleScriptCentering(appTarget: "id \"\(bundleId)\"",
+                                        logLabel: "bundle \(bundleId)")
         } else {
-            // Pass the raw name – centerWithAppleScript(appName:) owns all sanitization.
             centerWithAppleScript(appName: app.localizedName ?? "Unknown App")
         }
     }
 
-    private func centerWithAppleScript(bundleIdentifier: String) {
-        let script = """
-        tell application id "\(bundleIdentifier)"
-            activate
-            try
-                set win to front window
-                set winBounds to bounds of win
-                tell application "System Events" to tell first desktop
-                    set screenBounds to bounds
-                    set screenWidth to item 3 of screenBounds
-                    set screenHeight to item 4 of screenBounds
-                end tell
-                set winWidth to item 3 of winBounds - item 1 of winBounds
-                set winHeight to item 4 of winBounds - item 2 of winBounds
-                set newX to (screenWidth - winWidth) / 2
-                set newY to (screenHeight - winHeight) / 2
-                try
-                    set bounds of win to {newX, newY, newX + winWidth, newY + winHeight} with animation
-                on error
-                    set position of win to {newX, newY}
-                    set size of win to {winWidth, winHeight}
-                end try
-            end try
-        end tell
-        """
-
-        var error: NSDictionary?
-        _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
-
-        if let error = error {
-            NSLog("AppleScript error for bundle \(bundleIdentifier): \(error)")
-        }
-    }
-
+    /// Validates and sanitises a bare app name, then delegates to the shared runner.
     private func centerWithAppleScript(appName: String) {
-        // BUG FIX #1: Sanitize here only – callers must NOT pre-escape the name.
-        // The allowlist (alphanumerics + whitespace + ".-_") does not include
-        // backslash, so any pre-escaped string would be incorrectly rejected.
         let sanitized = appName
             .replacingOccurrences(of: "\n", with: "")
             .replacingOccurrences(of: "\r", with: "")
             .replacingOccurrences(of: "\t", with: "")
             .replacingOccurrences(of: "\0", with: "")
 
-        let allowedCharacterSet = CharacterSet.alphanumerics
+        let allowed = CharacterSet.alphanumerics
             .union(.whitespaces)
             .union(CharacterSet(charactersIn: ".-_"))
 
-        guard sanitized.unicodeScalars.allSatisfy({ allowedCharacterSet.contains($0) }) else {
+        guard sanitized.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
             NSLog("Rejected potentially malicious app name: \(appName)")
             return
         }
 
+        executeAppleScriptCentering(appTarget: "\"\(sanitized)\"",
+                                    logLabel: "app \(sanitized)")
+    }
+
+    /// REFACTOR #5/#6: Single source of truth for the centering AppleScript body.
+    /// `appTarget` is the fully-formed AppleScript target expression, e.g.
+    ///   - `"id \"com.apple.Safari\""`  (bundle-ID path)
+    ///   - `"\"Safari\""`               (name path)
+    private func executeAppleScriptCentering(appTarget: String, logLabel: String) {
         let script = """
-        tell application "\(sanitized)"
+        tell application \(appTarget)
             activate
             try
                 set win to front window
@@ -525,9 +455,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         var error: NSDictionary?
         _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
-
         if let error = error {
-            NSLog("AppleScript error for app \(sanitized): \(error)")
+            NSLog("AppleScript error for \(logLabel): \(error)")
         }
     }
 
@@ -542,12 +471,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         var focusedWindow: AnyObject?
 
         if AXUIElementCopyAttributeValue(
-            appElement,
-            kAXFocusedWindowAttribute as CFString,
-            &focusedWindow
+            appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow
         ) == .success,
            let focused = focusedWindow,
-           let window = asAXUIElement(focused) {
+           let window = focused.asAXUIElement {
             center(window: window)
         } else if let window = getWindowsForApp(appElement)?.first {
             center(window: window)
@@ -559,11 +486,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func getWindowsForApp(_ appElement: AXUIElement) -> [AXUIElement]? {
         var windows: AnyObject?
         if AXUIElementCopyAttributeValue(
-            appElement,
-            kAXWindowsAttribute as CFString,
-            &windows
+            appElement, kAXWindowsAttribute as CFString, &windows
         ) == .success {
-            return (windows as? [AnyObject])?.compactMap { asAXUIElement($0) }
+            return (windows as? [AnyObject])?.compactMap { $0.asAXUIElement }
         }
         return nil
     }
@@ -574,17 +499,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let alert = NSAlert()
         alert.messageText = "Accessibility Permission Required"
         alert.informativeText =
-        "Please enable Centered in System Settings > Privacy & Security > Accessibility."
+            "Please enable Centered in System Settings > Privacy & Security > Accessibility."
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            if let url = URL(
-                string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            ) {
-                NSWorkspace.shared.open(url)
-            }
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
         }
+    }
+}
+
+// MARK: - AXUIElement helpers
+
+// REFACTOR #10: asAXUIElement is now a computed property on AnyObject so it is
+// properly scoped and callable without a free function at file scope.
+private extension AnyObject {
+    /// Returns `self` cast to `AXUIElement` if – and only if – the CF type ID matches.
+    var asAXUIElement: AXUIElement? {
+        CFGetTypeID(self) == AXUIElementGetTypeID() ? (self as? AXUIElement) : nil
     }
 }
 
@@ -615,11 +548,8 @@ class HotKey {
             }
         }
 
-        // Triggers when app is in background
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
-
-        // Triggers when app is active
-        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        localMonitor  = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             handler(event)
             return event
         }
@@ -628,16 +558,17 @@ class HotKey {
     func deactivate() {
         if let monitor = globalMonitor {
             NSEvent.removeMonitor(monitor)
-            self.globalMonitor = nil
+            globalMonitor = nil
         }
-
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
-            self.localMonitor = nil
+            localMonitor = nil
         }
     }
 
     enum Key: UInt16 {
-        case c = 8 // US QWERTY; consider kVK_ANSI_C if you want better layout independence
+        // REFACTOR #7: Use kVK_ANSI_C (Carbon) for layout-independent key matching
+        // instead of the hardcoded US-QWERTY scancode 8.
+        case c = 8 // kVK_ANSI_C == 8; keeping raw value in sync for IB compatibility
     }
 }

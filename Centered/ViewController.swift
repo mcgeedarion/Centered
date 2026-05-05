@@ -21,9 +21,8 @@ class ViewController: NSViewController {
 
         updateUI()
 
-        if let langCode = appDelegate?.appLanguageCode {
-            print("Current language code:", langCode)
-        }
+        // REFACTOR #9: Removed dead print(appLanguageCode) – the property no
+        // longer exists now that it is not wired to any real localization logic.
 
         NotificationCenter.default.addObserver(
             self,
@@ -62,9 +61,9 @@ class ViewController: NSViewController {
         updateUI()
     }
 
-    // BUG FIX #4: Dispatch to main thread before touching any AppKit controls.
-    // NotificationCenter delivers synchronously on the posting thread, and
-    // AppDelegate can post from background queues (stateQueue / observersQueue).
+    // NotificationCenter delivers synchronously on the posting thread.
+    // Dispatching to main here guarantees AppKit controls are always
+    // updated on the correct thread regardless of who posts the notification.
     @objc private func updateUI() {
         DispatchQueue.main.async { [weak self] in
             self?.applyUI()
@@ -85,18 +84,10 @@ class ViewController: NSViewController {
         toggleSwitch.isEnabled = true
         toggleSwitch.state = enabled ? .on : .off
 
-        if enabled {
-            statusIndicator.image = NSImage(
-                systemSymbolName: "circle.fill",
-                accessibilityDescription: "Enabled"
-            )
-            statusIndicator.contentTintColor = .systemGreen
-        } else {
-            statusIndicator.image = NSImage(
-                systemSymbolName: "circle.fill",
-                accessibilityDescription: "Disabled"
-            )
-            statusIndicator.contentTintColor = .systemRed
-        }
+        statusIndicator.image = NSImage(
+            systemSymbolName: "circle.fill",
+            accessibilityDescription: enabled ? "Enabled" : "Disabled"
+        )
+        statusIndicator.contentTintColor = enabled ? .systemGreen : .systemRed
     }
 }
