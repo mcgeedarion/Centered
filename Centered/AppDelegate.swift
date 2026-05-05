@@ -6,6 +6,10 @@
 // enable/disable lifecycle.  All centering logic lives in WindowCenterer;
 // all AX observation lives in WindowObserver.
 //
+// @MainActor: NSApplicationDelegate callbacks, NSStatusItem, and Timer all
+// run on the main thread.  Annotating the class lets the compiler verify this
+// and removes the need for stateQueue / _isEnabled.
+//
 
 import Cocoa
 import ApplicationServices
@@ -19,6 +23,7 @@ extension Notification.Name {
 
 // MARK: -
 
+@MainActor
 @main
 class AppDelegate: NSObject, NSApplicationDelegate {
 
@@ -40,13 +45,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
     // MARK: - App enabled state
+    // Plain stored property — @MainActor serialises all access.
+    // No stateQueue or _isEnabled backing var needed.
 
-    private let stateQueue = DispatchQueue(label: "com.example.Centered.state")
-    private var _isEnabled = false
-    var isEnabled: Bool {
-        get { stateQueue.sync { _isEnabled } }
-        set { stateQueue.sync { _isEnabled = newValue } }
-    }
+    var isEnabled = false
 
     // MARK: - Screen selection (forwarded to centerer)
 
@@ -69,8 +71,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         disableApp()
-        permissionTimer?.invalidate()
-        permissionTimer = nil
     }
 
     // MARK: - Permissions
@@ -99,7 +99,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         observer.start()
         hotKey.activate()
 
-        postStateChanged()
+        NotificationCenter.default.post(name: .appStateChanged, object: nil)
         startPermissionChecks()
     }
 
@@ -109,11 +109,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isEnabled = false
         observer.stop()
         hotKey.deactivate()
-        // FIX: cancel any in-flight animation and stop the permission timer
-        // so neither keeps running after the app is disabled.
         centerer.cancelAnimation()
         stopPermissionChecks()
-        postStateChanged()
+
+        NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
     // MARK: - Manual trigger (menu / hotkey)
@@ -148,8 +147,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 action: #selector(selectScreen(_:)),
                 keyEquivalent: ""
             )
-            item.tag   = index
-            item.state = (selectedScreen == screen) ? .on : .off
+            item.tag    = index
+            item.state  = (selectedScreen == screen) ? .on : .off
             item.target = self
             menu.addItem(item)
         }
@@ -199,12 +198,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Helpers
-
-    private func postStateChanged() {
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .appStateChanged, object: nil)
-        }
-    }
 
     private func showPermissionAlert() {
         let alert = NSAlert()

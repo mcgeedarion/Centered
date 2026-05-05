@@ -2,39 +2,35 @@
 // WindowObserver.swift
 // Centered
 //
-// Created by Darion McGee on 7/22/25.
-//
 // Watches every regular-activation app via AXObserver and calls the provided
 // callback whenever a window is created, deminiaturized, or focused.
 // AppDelegate owns one instance and starts/stops it as the app is enabled.
+//
+// @MainActor: all mutable state lives on the main actor.  The AXObserverCallback
+// C closure cannot be @MainActor directly, so it hops back to main via
+// DispatchQueue.main.async before touching `self`.
 //
 
 import Cocoa
 import ApplicationServices
 
+@MainActor
 final class WindowObserver {
 
     var onWindowEvent: ((AXUIElement) -> Void)?
 
     // MARK: - Private state
+    // Plain stored properties — @MainActor serialises all access.
+    // No concurrent queue, no barrier writes, no double-checked locking needed.
 
-    private let queue = DispatchQueue(
-        label: "com.example.Centered.observers",
-        attributes: .concurrent
-    )
-    private var _observers   = [pid_t: AXObserver]()
-    private var _isObserving = false
+    private var observers   = [pid_t: AXObserver]()
+    private var isObserving = false
 
     // MARK: - Lifecycle
 
     func start() {
-        var shouldStart = false
-        queue.sync(flags: .barrier) {
-            guard !_isObserving, AXIsProcessTrusted() else { return }
-            _isObserving = true
-            shouldStart  = true
-        }
-        guard shouldStart else { return }
+        guard !isObserving, AXIsProcessTrusted() else { return }
+        isObserving = true
 
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
@@ -48,24 +44,17 @@ final class WindowObserver {
     }
 
     func stop() {
-        var shouldStop = false
-        queue.sync(flags: .barrier) {
-            guard _isObserving else { return }
-            _isObserving = false
-            shouldStop   = true
-        }
-        guard shouldStop else { return }
+        guard isObserving else { return }
+        isObserving = false
 
-        // Remove workspace observers before tearing down AX observers so no
-        // new observers can be added while we are cleaning up.
+        // Remove workspace observers first so no new AX observers are added
+        // while we are tearing down.
         let nc = NSWorkspace.shared.notificationCenter
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,   object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        queue.sync(flags: .barrier) {
-            _observers.values.forEach { removeRunLoopSource(for: $0) }
-            _observers.removeAll()
-        }
+        observers.values.forEach { removeRunLoopSource(for: $0) }
+        observers.removeAll()
     }
 
     // MARK: - NSWorkspace notifications
@@ -86,11 +75,8 @@ final class WindowObserver {
 
     private func addObserver(for app: NSRunningApplication) {
         let pid = app.processIdentifier
+        guard observers[pid] == nil else { return }
 
-        let alreadyTracked: Bool = queue.sync { _observers[pid] != nil }
-        guard !alreadyTracked else { return }
-
-        // All slow AX work happens outside any lock.
         var axObserver: AXObserver?
         guard AXObserverCreate(pid, observerCallback, &axObserver) == .success,
               let axObserver else { return }
@@ -104,23 +90,12 @@ final class WindowObserver {
             AXObserverAddNotification(axObserver, appElement, notifName as CFString, selfPtr)
         }
         addRunLoopSource(for: axObserver)
-
-        // Barrier write — only the dictionary mutation needs the lock.
-        queue.sync(flags: .barrier) {
-            guard _observers[pid] == nil else {
-                // Lost race: another call already registered this pid.
-                removeRunLoopSource(for: axObserver)
-                return
-            }
-            _observers[pid] = axObserver
-        }
+        observers[pid] = axObserver
     }
 
     private func removeObserver(for pid: pid_t) {
-        queue.sync(flags: .barrier) {
-            guard let observer = _observers.removeValue(forKey: pid) else { return }
-            removeRunLoopSource(for: observer)
-        }
+        guard let observer = observers.removeValue(forKey: pid) else { return }
+        removeRunLoopSource(for: observer)
     }
 
     // MARK: - Run-loop source helpers
@@ -137,18 +112,21 @@ final class WindowObserver {
                               .defaultMode)
     }
 
-    // MARK: - AX callback
+    // MARK: - AX callback entry point
 
     func handleWindowEvent(_ element: AXUIElement) {
         onWindowEvent?(element)
     }
 }
 
+// The AXObserverCallback is a plain C function pointer — it cannot carry
+// actor isolation.  It hops to the main actor before touching WindowObserver.
 private let observerCallback: AXObserverCallback = { _, element, _, refcon in
     guard let refcon,
           CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
-    Unmanaged<WindowObserver>
-        .fromOpaque(refcon)
-        .takeUnretainedValue()
-        .handleWindowEvent(element as AXUIElement)
+    let observer = Unmanaged<WindowObserver>.fromOpaque(refcon).takeUnretainedValue()
+    let elem     = element as AXUIElement
+    DispatchQueue.main.async {
+        observer.handleWindowEvent(elem)
+    }
 }
