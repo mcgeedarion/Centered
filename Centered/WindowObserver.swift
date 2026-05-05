@@ -2,6 +2,8 @@
 // WindowObserver.swift
 // Centered
 //
+// Created by Darion McGee on 7/22/25.
+//
 // Watches every regular-activation app via AXObserver and calls the provided
 // callback whenever a window is created, deminiaturized, or focused.
 // AppDelegate owns one instance and starts/stops it as the app is enabled.
