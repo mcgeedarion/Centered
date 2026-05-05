@@ -9,7 +9,7 @@
 import Cocoa
 import ApplicationServices
 
-// MARK: - AX casting helper (file-private, used by both WindowCenterer and WindowObserver)
+// MARK: - AX casting helper
 
 extension AnyObject {
     /// Returns `self` as an `AXUIElement` iff the CF type IDs match.
@@ -32,9 +32,14 @@ final class WindowCenterer {
         set { screenQueue.sync { _selectedScreen = newValue } }
     }
 
-    // MARK: - Animation cancellation token
+    // MARK: - Animation state
 
+    // Tracks in-flight animation so a second trigger cancels the first rather
+    // than running two chains concurrently.
     private var animationWorkItem: DispatchWorkItem?
+    // Set to true for the duration of an animation; callers can read this to
+    // decide whether to queue or skip a redundant request.
+    private(set) var isCentering = false
 
     // MARK: - Public entry points
 
@@ -81,7 +86,7 @@ final class WindowCenterer {
     // MARK: - AX centering
 
     private func centerViaAX(window: AXUIElement) -> Bool {
-        // Use visibleFrame so the Dock and menu bar are excluded.
+        // visibleFrame excludes the Dock and menu bar.
         guard let screen = selectedScreen ?? NSScreen.main else { return false }
 
         var sizeValue: AnyObject?
@@ -111,17 +116,20 @@ final class WindowCenterer {
 
         // Cancel any in-flight animation before starting a new one.
         animationWorkItem?.cancel()
+        isCentering = true
 
         let steps = 10
         let dx = (point.x - currentPos.x) / CGFloat(steps)
         let dy = (point.y - currentPos.y) / CGFloat(steps)
 
-        // Capture a fresh work item so stale closures can detect cancellation.
         let workItem = DispatchWorkItem {}
         animationWorkItem = workItem
 
         func step(_ i: Int) {
-            guard i <= steps, !workItem.isCancelled else { return }
+            guard i <= steps, !workItem.isCancelled else {
+                if !workItem.isCancelled { self.isCentering = false }
+                return
+            }
 
             var pos = CGPoint(
                 x: currentPos.x + dx * CGFloat(i),
@@ -132,6 +140,8 @@ final class WindowCenterer {
             }
             if i < steps {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { step(i + 1) }
+            } else {
+                self.isCentering = false
             }
         }
 

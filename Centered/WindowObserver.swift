@@ -21,16 +21,24 @@ final class WindowObserver {
         label: "com.example.Centered.observers",
         attributes: .concurrent
     )
-    private var _observers = [pid_t: AXObserver]()
-
-    private var isObserving = false
+    private var _observers    = [pid_t: AXObserver]()
+    // isObserving is guarded by the same concurrent queue via barrier writes
+    // so start()/stop() calls from any thread are safe.
+    private var _isObserving  = false
 
     // MARK: - Lifecycle
 
     /// Begin watching all currently-running apps and listen for future launches.
+    /// Safe to call repeatedly; subsequent calls while already observing are no-ops.
     func start() {
-        guard !isObserving, AXIsProcessTrusted() else { return }
-        isObserving = true
+        // Barrier write: atomically check-and-set _isObserving.
+        var shouldStart = false
+        queue.sync(flags: .barrier) {
+            guard !_isObserving, AXIsProcessTrusted() else { return }
+            _isObserving = true
+            shouldStart  = true
+        }
+        guard shouldStart else { return }
 
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
@@ -47,9 +55,16 @@ final class WindowObserver {
     }
 
     /// Stop watching all apps and remove all AX observers.
+    /// Safe to call repeatedly; calls while already stopped are no-ops.
+    /// After stop() returns, start() can be called again cleanly.
     func stop() {
-        guard isObserving else { return }
-        isObserving = false
+        var shouldStop = false
+        queue.sync(flags: .barrier) {
+            guard _isObserving else { return }
+            _isObserving = false
+            shouldStop   = true
+        }
+        guard shouldStop else { return }
 
         // Remove NSWorkspace observers first so no new AX observers are added
         // while we are tearing down.
@@ -100,16 +115,16 @@ final class WindowObserver {
         guard AXObserverCreate(pid, observerCallback, &axObserver) == .success,
               let axObserver = axObserver else { return }
 
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let selfPtr    = Unmanaged.passUnretained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
 
-        for notification in [
+        for notifName in [
             kAXWindowCreatedNotification,
             kAXWindowDeminiaturizedNotification,
             kAXFocusedWindowChangedNotification
         ] {
             AXObserverAddNotification(axObserver, appElement,
-                                      notification as CFString, selfPtr)
+                                      notifName as CFString, selfPtr)
         }
 
         CFRunLoopAddSource(
@@ -146,7 +161,6 @@ final class WindowObserver {
 
     // MARK: - AX callback
 
-    /// C-compatible callback; routes the event back to the owning WindowObserver.
     func handleWindowEvent(_ element: AXUIElement) {
         onWindowEvent?(element)
     }
