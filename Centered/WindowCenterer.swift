@@ -11,10 +11,12 @@ import ApplicationServices
 
 // MARK: - AX casting helper
 
-extension AnyObject {
-    /// Returns `self` as an `AXUIElement` iff the CF type IDs match.
-    var asAXUIElement: AXUIElement? {
-        CFGetTypeID(self) == AXUIElementGetTypeID() ? (self as? AXUIElement) : nil
+// CODE QUALITY: Scoped to a file-private AXCast namespace instead of a broad
+// `extension AnyObject`, so the helper is not visible on every object in scope.
+enum AXCast {
+    /// Returns `object` as an `AXUIElement` iff the CF type IDs match.
+    static func toElement(_ object: AnyObject) -> AXUIElement? {
+        CFGetTypeID(object) == AXUIElementGetTypeID() ? (object as? AXUIElement) : nil
     }
 }
 
@@ -34,11 +36,7 @@ final class WindowCenterer {
 
     // MARK: - Animation state
 
-    // Tracks in-flight animation so a second trigger cancels the first rather
-    // than running two chains concurrently.
     private var animationWorkItem: DispatchWorkItem?
-    // Set to true for the duration of an animation; callers can read this to
-    // decide whether to queue or skip a redundant request.
     private(set) var isCentering = false
 
     // MARK: - Public entry points
@@ -74,7 +72,7 @@ final class WindowCenterer {
             appElement, kAXFocusedWindowAttribute as CFString, &focusedWindow
         ) == .success,
            let focused = focusedWindow,
-           let window = focused.asAXUIElement {
+           let window = AXCast.toElement(focused) {
             center(window: window)
         } else if let window = windows(for: appElement)?.first {
             center(window: window)
@@ -83,10 +81,34 @@ final class WindowCenterer {
         }
     }
 
+    // MARK: - Geometry (internal for testability)
+
+    /// Returns the top-left origin that centers a window of `windowSize`
+    /// within `screenRect` (should be `screen.visibleFrame`).
+    static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
+        CGPoint(
+            x: screenRect.midX - windowSize.width  / 2,
+            y: screenRect.midY - windowSize.height / 2
+        )
+    }
+
+    /// Returns the interpolated position at animation step `i` of `totalSteps`
+    /// between `start` and `end`.
+    static func animationPosition(from start: CGPoint,
+                                  to end: CGPoint,
+                                  step i: Int,
+                                  totalSteps: Int) -> CGPoint {
+        let dx = (end.x - start.x) / CGFloat(totalSteps)
+        let dy = (end.y - start.y) / CGFloat(totalSteps)
+        return CGPoint(
+            x: start.x + dx * CGFloat(i),
+            y: start.y + dy * CGFloat(i)
+        )
+    }
+
     // MARK: - AX centering
 
     private func centerViaAX(window: AXUIElement) -> Bool {
-        // visibleFrame excludes the Dock and menu bar.
         guard let screen = selectedScreen ?? NSScreen.main else { return false }
 
         var sizeValue: AnyObject?
@@ -100,9 +122,9 @@ final class WindowCenterer {
         guard AXValueGetValue(size as! AXValue, .cgSize, &windowSize),
               windowSize.width > 0, windowSize.height > 0 else { return false }
 
-        let target = CGPoint(
-            x: screen.visibleFrame.midX - windowSize.width  / 2,
-            y: screen.visibleFrame.midY - windowSize.height / 2
+        let target = WindowCenterer.centeredOrigin(
+            windowSize: windowSize,
+            in: screen.visibleFrame
         )
         animateWindowPosition(window, to: target)
         return true
@@ -114,14 +136,10 @@ final class WindowCenterer {
         var currentPos = CGPoint()
         AXValueGetValue(currentPosValue, .cgPoint, &currentPos)
 
-        // Cancel any in-flight animation before starting a new one.
         animationWorkItem?.cancel()
         isCentering = true
 
-        let steps = 10
-        let dx = (point.x - currentPos.x) / CGFloat(steps)
-        let dy = (point.y - currentPos.y) / CGFloat(steps)
-
+        let steps    = 10
         let workItem = DispatchWorkItem {}
         animationWorkItem = workItem
 
@@ -131,9 +149,8 @@ final class WindowCenterer {
                 return
             }
 
-            var pos = CGPoint(
-                x: currentPos.x + dx * CGFloat(i),
-                y: currentPos.y + dy * CGFloat(i)
+            var pos = WindowCenterer.animationPosition(
+                from: currentPos, to: point, step: i, totalSteps: steps
             )
             if let val = AXValueCreate(.cgPoint, &pos) {
                 AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, val)
@@ -163,7 +180,7 @@ final class WindowCenterer {
         guard AXUIElementCopyAttributeValue(
             appElement, kAXWindowsAttribute as CFString, &windows
         ) == .success else { return nil }
-        return (windows as? [AnyObject])?.compactMap { $0.asAXUIElement }
+        return (windows as? [AnyObject])?.compactMap { AXCast.toElement($0) }
     }
 
     // MARK: - AppleScript fallback
@@ -196,7 +213,6 @@ final class WindowCenterer {
                                     logLabel:  "app \(sanitized)")
     }
 
-    /// Single AppleScript body; `appTarget` is a fully-formed AS target expression.
     private func executeAppleScriptCentering(appTarget: String, logLabel: String) {
         let script = """
         tell application \(appTarget)

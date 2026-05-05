@@ -26,7 +26,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let centerer = WindowCenterer()
     private let observer = WindowObserver()
-    private let hotKey   = HotKey(key: .c, modifiers: [.command, .option])
+
+    // CODE QUALITY: HotKey is fully configured at construction time.
+    // The handler captures centerer directly (no self cycle) so the hotkey
+    // is never in a partially-initialised state between alloc and enableApp().
+    private lazy var hotKey: HotKey = {
+        HotKey(key: .c, modifiers: [.command, .option]) { [weak self] in
+            guard let self, self.isEnabled else { return }
+            self.centerer.centerFrontmost()
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    }()
 
     // MARK: - Status item
 
@@ -90,11 +100,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             self?.centerer.center(window: window)
         }
         observer.start()
-
-        hotKey.keyDownHandler = { [weak self] in
-            self?.centerer.centerFrontmost()
-            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
-        }
         hotKey.activate()
 
         postStateChanged()
@@ -176,8 +181,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func startPermissionChecks() {
         permissionTimer?.invalidate()
-        // Schedule on RunLoop.main explicitly so the timer fires even if this
-        // method is called from a background thread.
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             guard let self else { return }
             if !AXIsProcessTrusted(), self.isEnabled {
@@ -199,9 +202,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func showPermissionAlert() {
         let alert = NSAlert()
-        alert.messageText    = "Accessibility Permission Required"
+        alert.messageText     = "Accessibility Permission Required"
         alert.informativeText = "Please enable Centered in System Settings > Privacy & Security > Accessibility."
-        alert.alertStyle     = .warning
+        alert.alertStyle      = .warning
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn,
