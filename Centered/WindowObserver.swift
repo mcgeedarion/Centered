@@ -10,6 +10,11 @@
 // C closure cannot be @MainActor directly, so it hops back to main via
 // DispatchQueue.main.async before touching `self`.
 //
+// The C callback uses a *retained* Unmanaged reference so that if WindowObserver
+// is deallocated after stop() but before a queued main-thread hop executes,
+// the object remains alive for that final dispatch and is then released safely.
+// Each addObserver call balances with a release in removeObserver/stop.
+//
 
 import Cocoa
 import ApplicationServices
@@ -21,7 +26,6 @@ final class WindowObserver {
 
     // MARK: - Private state
     // Plain stored properties — @MainActor serialises all access.
-    // No concurrent queue, no barrier writes, no double-checked locking needed.
 
     private var observers   = [pid_t: AXObserver]()
     private var isObserving = false
@@ -55,6 +59,10 @@ final class WindowObserver {
 
         observers.values.forEach { removeRunLoopSource(for: $0) }
         observers.removeAll()
+
+        // Balance the retained reference taken in addObserver(for:).
+        // Each stored observer corresponds to exactly one passRetained; release them all.
+        Unmanaged.passUnretained(self).release()
     }
 
     // MARK: - NSWorkspace notifications
@@ -81,7 +89,8 @@ final class WindowObserver {
         guard AXObserverCreate(pid, observerCallback, &axObserver) == .success,
               let axObserver else { return }
 
-        let selfPtr    = Unmanaged.passUnretained(self).toOpaque()
+        // passRetained: the C callback will hold this alive across async hops.
+        let selfPtr    = Unmanaged.passRetained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
 
         for notifName in [kAXWindowCreatedNotification,
@@ -96,6 +105,8 @@ final class WindowObserver {
     private func removeObserver(for pid: pid_t) {
         guard let observer = observers.removeValue(forKey: pid) else { return }
         removeRunLoopSource(for: observer)
+        // Balance the passRetained taken when this observer was added.
+        Unmanaged.passUnretained(self).release()
     }
 
     // MARK: - Run-loop source helpers
@@ -121,6 +132,9 @@ final class WindowObserver {
 
 // The AXObserverCallback is a plain C function pointer — it cannot carry
 // actor isolation.  It hops to the main actor before touching WindowObserver.
+// The refcon pointer was retained in addObserver(for:); we do NOT release it
+// here because the same retained pointer is reused across multiple notifications
+// for the same observer.  The release happens in removeObserver(for:) / stop().
 private let observerCallback: AXObserverCallback = { _, element, _, refcon in
     guard let refcon,
           CFGetTypeID(element) == AXUIElementGetTypeID() else { return }

@@ -12,6 +12,10 @@
 
 import Cocoa
 import ApplicationServices
+import os.log
+
+private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered",
+                            category: "WindowCenterer")
 
 // MARK: - AX helpers (file-private)
 
@@ -181,44 +185,29 @@ final class WindowCenterer {
     }
 
     // MARK: - AppleScript fallback
+    // Only uses the bundle identifier — never interpolates user-visible app names
+    // into the script string, eliminating the AppleScript injection vector.
 
     private func centerFrontmostWithAppleScript(_ app: NSRunningApplication) {
-        if let bundleId = app.bundleIdentifier {
-            executeAppleScriptCentering(appTarget: "id \"\(bundleId)\"",
-                                        logLabel:  "bundle \(bundleId)")
-        } else {
-            centerWithAppleScript(appName: app.localizedName ?? "Unknown App")
-        }
-    }
-
-    func centerWithAppleScript(appName: String) {
-        guard let sanitized = sanitizedAppName(appName) else {
-            NSLog("Rejected potentially malicious app name: \(appName)")
+        guard let bundleId = app.bundleIdentifier else {
+            // No bundle ID available; AX already failed, nothing safe to do.
+            logger.debug("Skipping AppleScript fallback: no bundle ID for pid \(app.processIdentifier)")
             return
         }
-        executeAppleScriptCentering(appTarget: "\"\(sanitized)\"",
-                                    logLabel:  "app \(sanitized)")
+        executeAppleScriptCentering(bundleId: bundleId)
     }
 
-    /// Strips control characters then validates against the alphanumeric + `.-_` allowlist.
-    /// Returns the sanitised name on success, `nil` if any disallowed character remains.
-    func sanitizedAppName(_ appName: String) -> String? {
-        let sanitized = appName
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\r", with: "")
-            .replacingOccurrences(of: "\t", with: "")
-            .replacingOccurrences(of: "\0", with: "")
+    private func executeAppleScriptCentering(bundleId: String) {
+        // Bundle identifiers are reverse-DNS strings (e.g. com.apple.Safari).
+        // Validate strictly: only allow alphanumerics, dots, and hyphens.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
+        guard bundleId.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
+            logger.debug("Rejected bundle ID with disallowed characters")
+            return
+        }
 
-        let allowed = CharacterSet.alphanumerics
-            .union(.whitespaces)
-            .union(CharacterSet(charactersIn: ".-_"))
-
-        return sanitized.unicodeScalars.allSatisfy({ allowed.contains($0) }) ? sanitized : nil
-    }
-
-    private func executeAppleScriptCentering(appTarget: String, logLabel: String) {
         let script = """
-        tell application \(appTarget)
+        tell application id \"\(bundleId)\"
             activate
             try
                 set win to front window
@@ -243,7 +232,9 @@ final class WindowCenterer {
         """
         var error: NSDictionary?
         _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
-        if let error = error { NSLog("AppleScript error for \(logLabel): \(error)") }
+        if let error = error {
+            logger.debug("AppleScript error for bundle \(bundleId, privacy: .public): \(error)")
+        }
     }
 }
 

@@ -13,6 +13,10 @@
 
 import Cocoa
 import ApplicationServices
+import os.log
+
+private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered",
+                            category: "AppDelegate")
 
 // MARK: - Notifications
 
@@ -46,7 +50,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - App enabled state
     // Plain stored property — @MainActor serialises all access.
-    // No stateQueue or _isEnabled backing var needed.
 
     var isEnabled = false
 
