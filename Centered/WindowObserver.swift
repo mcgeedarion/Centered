@@ -8,8 +8,13 @@
 //
 // Thread model: all mutable state is @MainActor. The AXObserverCallback C
 // function cannot carry actor isolation, so it hops to the main queue before
-// touching `self`. Each addObserver call takes a retained reference to `self`
-// that is released symmetrically in removeObserver / stop().
+// touching `self`.
+//
+// Retain balance:
+//   Each addObserver(for:) calls passRetained once and stores the observer.
+//   removeObserver(for:) releases once for that specific entry.
+//   stop() releases once per stored observer (not once globally) to balance
+//   exactly the number of passRetained calls that were made.
 //
 
 import Cocoa
@@ -23,7 +28,7 @@ final class WindowObserver {
     var onWindowEvent: ((AXUIElement) -> Void)?
 
     /// Updated by AppDelegate whenever the user edits the exclusion list.
-    var excludedBundleIDs: Set<String> = UserDefaults.standard.excludedBundleIDs
+    var excludedBundleIDs: Set<String> = []
 
     // MARK: - Private state
 
@@ -53,17 +58,19 @@ final class WindowObserver {
         guard isObserving else { return }
         isObserving = false
 
-        // Unsubscribe workspace notifications before tearing down AX observers
-        // so no new observers are added during teardown.
         let nc = NSWorkspace.shared.notificationCenter
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
+        // Release once per stored observer to balance each passRetained in addObserver(for:).
+        let count = observers.count
         observers.values.forEach { removeRunLoopSource(for: $0) }
         observers.removeAll()
         bundleIDs.removeAll()
 
-        Unmanaged.passUnretained(self).release()
+        for _ in 0 ..< count {
+            Unmanaged.passUnretained(self).release()
+        }
     }
 
     // MARK: - Workspace notifications
@@ -136,8 +143,6 @@ final class WindowObserver {
 
 // MARK: - AX callback
 
-// Plain C function — cannot carry actor isolation. Reads the pid from the
-// element synchronously (safe on any thread), then hops to main.
 private let axObserverCallback: AXObserverCallback = { _, element, _, refcon in
     guard let refcon, CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
     var pid: pid_t = 0

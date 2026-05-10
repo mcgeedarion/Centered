@@ -33,18 +33,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let centerer = WindowCenterer()
     private let observer = WindowObserver()
 
+    // Hotkeys are initialised from persisted bindings at first access.
+    // keyDownHandler dispatches back to main so it's safe to touch
+    // centerer (which is @MainActor) from the NSEvent callback queue.
     private lazy var hotKey: HotKey = HotKey(binding: UserDefaults.standard.centerActiveBinding) {
         [weak self] in
-        guard let self, isEnabled else { return }
-        centerer.centerFrontmost()
-        NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        DispatchQueue.main.async {
+            guard let self, self.isEnabled else { return }
+            self.centerer.centerFrontmost()
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
     }
 
     private lazy var allWindowsHotKey: HotKey = HotKey(binding: UserDefaults.standard.centerAllBinding) {
         [weak self] in
-        guard let self, isEnabled else { return }
-        centerer.centerAllWindows()
-        NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        DispatchQueue.main.async {
+            guard let self, self.isEnabled else { return }
+            self.centerer.centerAllWindows()
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
     }
 
     // MARK: - State
@@ -154,6 +161,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard AXIsProcessTrusted() else { showPermissionAlert(); return }
         isEnabled = true
         observer.onWindowEvent     = { [weak self] win in self?.centerer.center(window: win) }
+        // Push the persisted exclusion list into the observer; the property
+        // default is intentionally empty so this is the single source of truth.
         observer.excludedBundleIDs = UserDefaults.standard.excludedBundleIDs
         observer.start()
         hotKey.activate()
@@ -197,17 +206,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateScreenMenu()
     }
 
-    func updateScreenMenu() {
+    private func updateScreenMenu() {
         let menu    = NSMenu()
         let screens = NSScreen.screens
         guard !screens.isEmpty else { statusItem?.menu = menu; return }
 
-        // Screen picker
         for (i, screen) in screens.enumerated() {
             let item = NSMenuItem(
-                title:          "Screen \(i + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))",
-                action:         #selector(selectScreen(_:)),
-                keyEquivalent:  ""
+                title:         "Screen \(i + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))",
+                action:        #selector(selectScreen(_:)),
+                keyEquivalent: ""
             )
             item.tag    = i
             item.state  = (selectedScreen == screen) ? .on : .off
@@ -217,7 +225,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // Window commands — live hotkey display
         menu.addItem(makeItem(
             title:  "Center Active Window  " + UserDefaults.standard.centerActiveBinding.displayString,
             action: #selector(centerActiveWindowManually)
@@ -228,7 +235,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         ))
 
         menu.addItem(.separator())
-
         menu.addItem(makeItem(title: "Preferences…", action: #selector(openPreferences), key: ","))
 
         if #available(macOS 13, *) {
@@ -292,8 +298,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         else { return }
         NSWorkspace.shared.open(url)
     }
-
-    // MARK: - Helpers
 
     private func makeItem(title: String, action: Selector, key: String = "") -> NSMenuItem {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: key)

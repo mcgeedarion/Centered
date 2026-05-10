@@ -6,6 +6,14 @@
 // Supports any key+modifier combination and can be rebound at runtime
 // without deallocation via rebind(to:).
 //
+// @MainActor: activate/deactivate/rebind must always be called on the main
+// thread. NSEvent monitors are added and removed on the thread that calls
+// addGlobalMonitorForEvents — which is always main here. The handler closure
+// captures `self` weakly and performs its work synchronously on the callback
+// thread (NSEvent global monitors fire on a private GCD queue), so it must
+// only touch thread-safe state. keyDownHandler itself is called on that queue;
+// callers are responsible for dispatching back to main if needed.
+//
 
 import Cocoa
 import Carbon.HIToolbox
@@ -15,16 +23,11 @@ import Carbon.HIToolbox
 /// A serialisable key+modifier pair stored in UserDefaults.
 struct HotKeyBinding: Equatable {
 
-    /// Carbon virtual key code (e.g. kVK_ANSI_C = 8).
-    var keyCode: UInt16
-    /// Device-independent modifier flags.
+    var keyCode:   UInt16
     var modifiers: NSEvent.ModifierFlags
 
-    // MARK: Defaults
     static let centerActive = HotKeyBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .option])
     static let centerAll    = HotKeyBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .shift])
-
-    // MARK: UserDefaults round-trip
 
     var dictionaryRepresentation: [String: Any] {
         ["keyCode": Int(keyCode), "modifiers": modifiers.rawValue]
@@ -43,9 +46,6 @@ struct HotKeyBinding: Equatable {
         modifiers = NSEvent.ModifierFlags(rawValue: mf)
     }
 
-    // MARK: Display
-
-    /// Human-readable shortcut string, e.g. "⌘⌥C".
     var displayString: String {
         let m = modifiers.intersection(.deviceIndependentFlagsMask)
         var s = ""
@@ -58,13 +58,11 @@ struct HotKeyBinding: Equatable {
     }
 }
 
-// MARK: - Key-code display table
+// MARK: - Key-code display table (built once at file scope)
 
-/// Maps Carbon virtual key codes to printable strings.
-/// Built once at file scope — never reconstructed per call.
 private let kKeyDisplayTable: [UInt16: String] = {
     var t = [UInt16: String]()
-    let alpha: [(Int32, String)] = [
+    let entries: [(Int32, String)] = [
         (kVK_ANSI_A,"A"),(kVK_ANSI_B,"B"),(kVK_ANSI_C,"C"),(kVK_ANSI_D,"D"),
         (kVK_ANSI_E,"E"),(kVK_ANSI_F,"F"),(kVK_ANSI_G,"G"),(kVK_ANSI_H,"H"),
         (kVK_ANSI_I,"I"),(kVK_ANSI_J,"J"),(kVK_ANSI_K,"K"),(kVK_ANSI_L,"L"),
@@ -80,7 +78,7 @@ private let kKeyDisplayTable: [UInt16: String] = {
         (kVK_F5,"F5"),(kVK_F6,"F6"),(kVK_F7,"F7"),(kVK_F8,"F8"),
         (kVK_F9,"F9"),(kVK_F10,"F10"),(kVK_F11,"F11"),(kVK_F12,"F12"),
     ]
-    for (code, label) in alpha { t[UInt16(code)] = label }
+    for (code, label) in entries { t[UInt16(code)] = label }
     return t
 }()
 
@@ -90,6 +88,10 @@ private func keyCodeDisplayString(_ keyCode: UInt16) -> String {
 
 // MARK: - HotKey
 
+/// Must be created, activated, deactivated, and rebound on @MainActor.
+/// The keyDownHandler closure is invoked on NSEvent's private callback queue;
+/// callers should dispatch to main if touching UI or actor-isolated state.
+@MainActor
 final class HotKey {
 
     private(set) var binding: HotKeyBinding
@@ -99,14 +101,10 @@ final class HotKey {
     private var localMonitor:  Any?
     private var isActive = false
 
-    // MARK: Init
-
     init(binding: HotKeyBinding, handler: (() -> Void)? = nil) {
         self.binding        = binding
         self.keyDownHandler = handler
     }
-
-    // MARK: Lifecycle
 
     func activate() {
         guard !isActive else { return }
@@ -121,7 +119,6 @@ final class HotKey {
         removeMonitor(&localMonitor)
     }
 
-    /// Swaps the binding and re-attaches monitors live; safe to call while active.
     func rebind(to newBinding: HotKeyBinding) {
         let wasActive = isActive
         if wasActive {
@@ -132,17 +129,22 @@ final class HotKey {
         if wasActive { attachMonitors() }
     }
 
-    deinit { deactivate() }
-
-    // MARK: Private
+    deinit {
+        // NSEvent monitors must be removed; removeMonitor is thread-safe.
+        if let m = globalMonitor { NSEvent.removeMonitor(m) }
+        if let m = localMonitor  { NSEvent.removeMonitor(m) }
+    }
 
     private func attachMonitors() {
+        // Capture binding by value so the closure doesn't need `self`
+        // for the hot comparison path — avoids a weak/strong dance on
+        // every keypress.
+        let b = binding
         let handler: (NSEvent) -> Void = { [weak self] event in
-            guard let self,
-                  event.modifierFlags.intersection(.deviceIndependentFlagsMask) == self.binding.modifiers,
-                  event.keyCode == self.binding.keyCode
+            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == b.modifiers,
+                  event.keyCode == b.keyCode
             else { return }
-            self.keyDownHandler?()
+            self?.keyDownHandler?()
         }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
         localMonitor  = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
