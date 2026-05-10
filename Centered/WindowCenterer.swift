@@ -92,14 +92,10 @@ final class WindowCenterer {
     }
 
     /// Centers the focused window of the frontmost app; falls back to AppleScript.
-    /// Fetches kAXFocusedWindowAttribute first; only falls back to the full
-    /// window list if that attribute is genuinely absent (not just nil).
     func centerFrontmost() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
 
-        // Single AX round-trip: focused window covers the common case.
-        // axWindows is only called when kAXFocusedWindowAttribute is absent.
         if let win = axElementAttr(el, attribute: kAXFocusedWindowAttribute) {
             center(window: win)
         } else if let win = axWindows(el)?.first {
@@ -109,7 +105,9 @@ final class WindowCenterer {
         }
     }
 
-    /// Centers every non-minimized window of the frontmost app concurrently.
+    /// Centers every non-minimized window of the frontmost app.
+    /// For each window where AX centering fails, falls back to AppleScript
+    /// for that app (one AppleScript call covers all windows in the app).
     func centerAllWindows() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
@@ -118,9 +116,15 @@ final class WindowCenterer {
             centerFrontmostWithAppleScript(app)
             return
         }
+
+        var anyFailed = false
         for win in windows where axBool(win, attribute: kAXMinimizedAttribute) != true {
-            _ = centerViaAX(window: win)
+            if !centerViaAX(window: win) { anyFailed = true }
         }
+        // If any AX centering failed, issue one AppleScript call for the app.
+        // AppleScript operates on the front window, so this is best-effort for
+        // partially-AX-compliant apps (e.g. Finder).
+        if anyFailed { centerFrontmostWithAppleScript(app) }
     }
 
     /// Cancels all in-flight animations immediately.
@@ -179,7 +183,6 @@ final class WindowCenterer {
         }
 
         func step(_ i: Int) {
-            // Abort if cancelled or if the window has been destroyed.
             guard i <= kAnimationSteps,
                   !token.isCancelled,
                   axIsValid(window)

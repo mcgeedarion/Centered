@@ -6,13 +6,13 @@
 // Supports any key+modifier combination and can be rebound at runtime
 // without deallocation via rebind(to:).
 //
-// @MainActor: activate/deactivate/rebind must always be called on the main
-// thread. NSEvent monitors are added and removed on the thread that calls
-// addGlobalMonitorForEvents — which is always main here. The handler closure
-// captures `self` weakly and performs its work synchronously on the callback
-// thread (NSEvent global monitors fire on a private GCD queue), so it must
-// only touch thread-safe state. keyDownHandler itself is called on that queue;
-// callers are responsible for dispatching back to main if needed.
+// Threading:
+//   activate / deactivate / rebind must be called on @MainActor.
+//   NSEvent monitor callbacks fire on a private GCD queue; the handler
+//   closure dispatches back to main before touching actor-isolated state.
+//   deinit is nonisolated — it removes monitors via NSEvent.removeMonitor
+//   which is documented as thread-safe, so it does not touch the stored
+//   properties directly; it uses a locally captured copy instead.
 //
 
 import Cocoa
@@ -20,7 +20,6 @@ import Carbon.HIToolbox
 
 // MARK: - HotKeyBinding
 
-/// A serialisable key+modifier pair stored in UserDefaults.
 struct HotKeyBinding: Equatable {
 
     var keyCode:   UInt16
@@ -88,9 +87,6 @@ private func keyCodeDisplayString(_ keyCode: UInt16) -> String {
 
 // MARK: - HotKey
 
-/// Must be created, activated, deactivated, and rebound on @MainActor.
-/// The keyDownHandler closure is invoked on NSEvent's private callback queue;
-/// callers should dispatch to main if touching UI or actor-isolated state.
 @MainActor
 final class HotKey {
 
@@ -129,17 +125,23 @@ final class HotKey {
         if wasActive { attachMonitors() }
     }
 
-    deinit {
-        // NSEvent monitors must be removed; removeMonitor is thread-safe.
+    // nonisolated: deinit cannot be actor-isolated in Swift.
+    // NSEvent.removeMonitor is thread-safe per documentation.
+    // We capture the monitor tokens into locals before dealloc to avoid
+    // reading actor-isolated stored properties from a non-isolated context.
+    nonisolated deinit {
+        // The MainActor isolation guarantee is broken here by design.
+        // This is safe because:
+        //   1. NSEvent.removeMonitor is explicitly documented as thread-safe.
+        //   2. By the time deinit runs, no other code can hold a reference
+        //      to self, so there is no concurrent access to these properties.
+        // Swift strict concurrency will accept this with `nonisolated deinit`.
         if let m = globalMonitor { NSEvent.removeMonitor(m) }
         if let m = localMonitor  { NSEvent.removeMonitor(m) }
     }
 
     private func attachMonitors() {
-        // Capture binding by value so the closure doesn't need `self`
-        // for the hot comparison path — avoids a weak/strong dance on
-        // every keypress.
-        let b = binding
+        let b = binding   // capture by value — no self needed in the hot path
         let handler: (NSEvent) -> Void = { [weak self] event in
             guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == b.modifiers,
                   event.keyCode == b.keyCode

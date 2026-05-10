@@ -33,9 +33,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let centerer = WindowCenterer()
     private let observer = WindowObserver()
 
-    // Hotkeys are initialised from persisted bindings at first access.
-    // keyDownHandler dispatches back to main so it's safe to touch
-    // centerer (which is @MainActor) from the NSEvent callback queue.
     private lazy var hotKey: HotKey = HotKey(binding: UserDefaults.standard.centerActiveBinding) {
         [weak self] in
         DispatchQueue.main.async {
@@ -107,7 +104,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         disableApp()
     }
 
-    // MARK: - Hotkey rebind (called by PreferencesWindowController)
+    // MARK: - Hotkey rebind
 
     func rebindHotKey(to binding: HotKeyBinding) {
         UserDefaults.standard.centerActiveBinding = binding
@@ -121,11 +118,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateScreenMenu()
     }
 
-    // MARK: - Exclusion list (called by PreferencesWindowController)
+    // MARK: - Exclusion list
 
     func setExcludedBundleIDs(_ ids: Set<String>) {
         UserDefaults.standard.excludedBundleIDs = ids
         observer.excludedBundleIDs = ids
+    }
+
+    // MARK: - Preferences window
+
+    /// Called by PreferencesWindowController via NSWindowDelegate when closing.
+    func preferencesWindowDidClose() {
+        preferencesWindowController = nil
     }
 
     // MARK: - Screen persistence
@@ -161,8 +165,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard AXIsProcessTrusted() else { showPermissionAlert(); return }
         isEnabled = true
         observer.onWindowEvent     = { [weak self] win in self?.centerer.center(window: win) }
-        // Push the persisted exclusion list into the observer; the property
-        // default is intentionally empty so this is the single source of truth.
         observer.excludedBundleIDs = UserDefaults.standard.excludedBundleIDs
         observer.start()
         hotKey.activate()

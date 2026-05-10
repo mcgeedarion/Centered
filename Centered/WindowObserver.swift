@@ -13,12 +13,20 @@
 // Retain balance:
 //   Each addObserver(for:) calls passRetained once and stores the observer.
 //   removeObserver(for:) releases once for that specific entry.
-//   stop() releases once per stored observer (not once globally) to balance
-//   exactly the number of passRetained calls that were made.
+//   stop() releases once per stored observer to balance exactly the number
+//   of passRetained calls that were made.
+//
+// Retry:
+//   AXObserverCreate can fail transiently (e.g. kAXErrorAPIDisabled during
+//   login). Apps that failed are queued in `pendingRetry` and retried up to
+//   kMaxRetryAttempts times with kRetryInterval spacing.
 //
 
 import Cocoa
 import ApplicationServices
+
+private let kRetryInterval:    TimeInterval = 2.0
+private let kMaxRetryAttempts: Int          = 5
 
 @MainActor
 final class WindowObserver {
@@ -26,16 +34,17 @@ final class WindowObserver {
     // MARK: - Public interface
 
     var onWindowEvent: ((AXUIElement) -> Void)?
-
-    /// Updated by AppDelegate whenever the user edits the exclusion list.
     var excludedBundleIDs: Set<String> = []
 
     // MARK: - Private state
 
     private var observers   = [pid_t: AXObserver]()
-    /// pid → bundleID cache; avoids NSRunningApplication lookups on every event.
     private var bundleIDs   = [pid_t: String]()
     private var isObserving = false
+
+    /// Apps whose AXObserverCreate failed transiently; value = attempts so far.
+    private var pendingRetry = [NSRunningApplication: Int]()
+    private var retryTimer:  Timer?
 
     // MARK: - Lifecycle
 
@@ -58,11 +67,15 @@ final class WindowObserver {
         guard isObserving else { return }
         isObserving = false
 
+        retryTimer?.invalidate()
+        retryTimer = nil
+        pendingRetry.removeAll()
+
         let nc = NSWorkspace.shared.notificationCenter
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        // Release once per stored observer to balance each passRetained in addObserver(for:).
+        // Release once per stored observer to balance each passRetained.
         let count = observers.count
         observers.values.forEach { removeRunLoopSource(for: $0) }
         observers.removeAll()
@@ -86,6 +99,7 @@ final class WindowObserver {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
                 as? NSRunningApplication
         else { return }
+        pendingRetry.removeValue(forKey: app)
         removeObserver(for: app.processIdentifier)
     }
 
@@ -96,9 +110,13 @@ final class WindowObserver {
         guard observers[pid] == nil else { return }
 
         var axObserver: AXObserver?
-        guard AXObserverCreate(pid, axObserverCallback, &axObserver) == .success,
-              let axObserver
-        else { return }
+        let result = AXObserverCreate(pid, axObserverCallback, &axObserver)
+
+        guard result == .success, let axObserver else {
+            // Transient failure — schedule a retry if we haven't exceeded the limit.
+            scheduleRetry(for: app)
+            return
+        }
 
         let selfPtr    = Unmanaged.passRetained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
@@ -112,6 +130,7 @@ final class WindowObserver {
         addRunLoopSource(for: axObserver)
         observers[pid] = axObserver
         bundleIDs[pid] = app.bundleIdentifier
+        pendingRetry.removeValue(forKey: app)   // succeeded — remove from retry queue
     }
 
     private func removeObserver(for pid: pid_t) {
@@ -119,6 +138,36 @@ final class WindowObserver {
         bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: observer)
         Unmanaged.passUnretained(self).release()
+    }
+
+    // MARK: - Retry
+
+    private func scheduleRetry(for app: NSRunningApplication) {
+        let attempts = pendingRetry[app, default: 0]
+        guard attempts < kMaxRetryAttempts else {
+            pendingRetry.removeValue(forKey: app)
+            return
+        }
+        pendingRetry[app] = attempts + 1
+        if retryTimer == nil {
+            let t = Timer(timeInterval: kRetryInterval, repeats: true) { [weak self] _ in
+                self?.retryPending()
+            }
+            RunLoop.main.add(t, forMode: .common)
+            retryTimer = t
+        }
+    }
+
+    private func retryPending() {
+        guard !pendingRetry.isEmpty else {
+            retryTimer?.invalidate()
+            retryTimer = nil
+            return
+        }
+        // Snapshot keys so we can mutate pendingRetry inside addObserver.
+        for app in Array(pendingRetry.keys) {
+            addObserver(for: app)
+        }
     }
 
     // MARK: - Run-loop helpers

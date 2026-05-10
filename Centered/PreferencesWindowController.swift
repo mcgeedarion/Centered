@@ -9,13 +9,11 @@
 //   2. Exclusions — add/remove apps from the auto-center exclusion list
 //   3. About      — bundle version string
 //
-// Correctness notes:
-//   - windowDidBecomeKey reloads all fields from UserDefaults so the UI
-//     always reflects the live state when the window is shown.
-//   - commitRecording rejects a new binding that duplicates the other hotkey.
-//   - removeButton is enabled/disabled via tableViewSelectionDidChange.
-//   - The NSOpenPanel is stored as a property and cancelled on windowWillClose
-//     so it cannot outlive this controller and hold a strong self reference.
+// Window lifecycle:
+//   windowDidBecomeKey  — reloads all fields from UserDefaults
+//   windowWillClose     — cancels any open NSOpenPanel; notifies AppDelegate
+//                         to nil its preferencesWindowController reference
+//                         so the window and all subviews are released.
 //
 
 import Cocoa
@@ -27,7 +25,7 @@ final class KeyRecorderField: NSTextField {
 
     var binding: HotKeyBinding { didSet { stringValue = binding.displayString } }
     var onBindingChanged: ((HotKeyBinding) -> Void)?
-    /// Optional binding the recorder should reject as a duplicate.
+    /// Binding the recorder should reject as a duplicate of the sibling field.
     var conflictBinding: HotKeyBinding?
 
     private var isRecording = false
@@ -84,7 +82,6 @@ final class KeyRecorderField: NSTextField {
     }
 
     private func commitRecording(_ newBinding: HotKeyBinding) {
-        // Reject if it duplicates the sibling recorder's binding.
         if let conflict = conflictBinding, newBinding == conflict {
             isRecording = false
             stringValue = binding.displayString
@@ -118,8 +115,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var tableView:         NSTableView!
     private var removeButton:      NSButton!
     private var excludedIDs:       [String] = []
-    /// Retained while the open panel is running; nil otherwise.
-    private var openPanel: NSOpenPanel?
+    private var openPanel:         NSOpenPanel?
 
     // MARK: Init
 
@@ -142,25 +138,21 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     // MARK: NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
-        // Reload from UserDefaults each time the window is shown so the UI
-        // always reflects the live state (e.g. after an external defaults write).
         let activeBinding = UserDefaults.standard.centerActiveBinding
         let allBinding    = UserDefaults.standard.centerAllBinding
-        activeKeyRecorder.binding      = activeBinding
-        allKeyRecorder.binding         = allBinding
-        // Keep conflict references in sync.
+        activeKeyRecorder.binding         = activeBinding
+        allKeyRecorder.binding            = allBinding
         activeKeyRecorder.conflictBinding = allBinding
         allKeyRecorder.conflictBinding    = activeBinding
-        // Reload exclusion list.
         excludedIDs = UserDefaults.standard.excludedBundleIDs.sorted()
         tableView.reloadData()
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Cancel any running open panel so it doesn't hold a strong reference
-        // to self after the window is gone.
         openPanel?.cancel(nil)
         openPanel = nil
+        // Release self from AppDelegate so the window and all subviews are deallocated.
+        appDelegate?.preferencesWindowDidClose()
     }
 
     // MARK: UI
@@ -168,7 +160,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
-        // Hotkeys
         let hotkeysHeader = sectionLabel("Hotkeys")
         let activeLabel   = fieldLabel("Center Active Window")
         let allLabel      = fieldLabel("Center All Windows")
@@ -190,9 +181,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             self?.appDelegate?.rebindAllWindowsHotKey(to: b)
         }
 
-        let hotkeysHint = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
-
-        // Exclusions
+        let hotkeysHint      = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
         let exclusionsHeader = sectionLabel("Auto-Center Exclusions")
         let exclusionsHint   = hintLabel("Apps listed here will never be auto-centered when focused.")
         excludedIDs          = UserDefaults.standard.excludedBundleIDs.sorted()
@@ -204,9 +193,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
         removeButton = NSButton(title: "Remove", target: self, action: #selector(removeExclusion))
         removeButton.bezelStyle = .rounded
-        removeButton.isEnabled  = false   // enabled by tableViewSelectionDidChange
+        removeButton.isEnabled  = false
 
-        // About
         let version    = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let aboutLabel = hintLabel("Centered v\(version) — personal use build")
 
@@ -274,13 +262,11 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let sv = NSScrollView()
         sv.hasVerticalScroller = true
         sv.borderType          = .bezelBorder
-
         tableView            = NSTableView()
         tableView.dataSource = self
         tableView.delegate   = self
         tableView.rowHeight  = 20
         tableView.headerView = nil
-
         let col = NSTableColumn(identifier: .init("bundleID"))
         col.title = "Bundle ID"
         tableView.addTableColumn(col)
