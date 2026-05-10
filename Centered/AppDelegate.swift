@@ -6,10 +6,6 @@
 // enable/disable lifecycle.  All centering logic lives in WindowCenterer;
 // all AX observation lives in WindowObserver.
 //
-// @MainActor: NSApplicationDelegate callbacks, NSStatusItem, and Timer all
-// run on the main thread.  Annotating the class lets the compiler verify this
-// and removes the need for stateQueue / _isEnabled.
-//
 
 import Cocoa
 import ApplicationServices
@@ -38,68 +34,63 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private let observer = WindowObserver()
 
     private lazy var hotKey: HotKey = {
-        HotKey(key: .c, modifiers: [.command, .option]) { [weak self] in
+        HotKey(binding: UserDefaults.standard.centerActiveBinding) { [weak self] in
             guard let self, self.isEnabled else { return }
             self.centerer.centerFrontmost()
             NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
         }
     }()
 
-    /// ⌘⇧C — centers every non-minimized window of the frontmost app.
     private lazy var allWindowsHotKey: HotKey = {
-        HotKey(key: .c, modifiers: [.command, .shift]) { [weak self] in
+        HotKey(binding: UserDefaults.standard.centerAllBinding) { [weak self] in
             guard let self, self.isEnabled else { return }
             self.centerer.centerAllWindows()
             NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
         }
     }()
 
+    // MARK: - Preferences window
+
+    private var preferencesWindowController: PreferencesWindowController?
+
     // MARK: - Status item
 
     private var statusItem: NSStatusItem?
 
-    // MARK: - App enabled state
+    // MARK: - App state
 
     var isEnabled = false
 
-    // MARK: - Screen selection (forwarded to centerer + persisted)
+    // MARK: - Screen selection
 
     var selectedScreen: NSScreen? {
         get { centerer.selectedScreen }
         set {
             centerer.selectedScreen = newValue
-            // Persist by localizedName so it survives relaunches.
             UserDefaults.standard.selectedScreenName = newValue?.localizedName
         }
     }
 
     // MARK: - Launch at login
 
-    /// Whether the app is registered as a login item via SMAppService.
     var launchAtLogin: Bool {
         get {
-            if #available(macOS 13, *) {
-                return SMAppService.mainApp.status == .enabled
-            }
+            if #available(macOS 13, *) { return SMAppService.mainApp.status == .enabled }
             return false
         }
         set {
             guard #available(macOS 13, *) else { return }
             do {
-                if newValue {
-                    try SMAppService.mainApp.register()
-                } else {
-                    try SMAppService.mainApp.unregister()
-                }
+                if newValue { try SMAppService.mainApp.register() }
+                else        { try SMAppService.mainApp.unregister() }
             } catch {
                 logger.debug("SMAppService toggle failed: \(error.localizedDescription, privacy: .public)")
             }
-            // Rebuild menu so the checkmark reflects the new state.
             updateScreenMenu()
         }
     }
 
-    // MARK: - Permissions
+    // MARK: - Permissions timer
 
     private var permissionTimer: Timer?
 
@@ -111,7 +102,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         requestPermissionsIfNeeded()
         enableApp()
 
-        // Rebuild menu and validate selected screen when display configuration changes.
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screensDidChange),
@@ -124,24 +114,37 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         disableApp()
     }
 
+    // MARK: - Hotkey rebind (called by PreferencesWindowController)
+
+    func rebindHotKey(to binding: HotKeyBinding) {
+        UserDefaults.standard.centerActiveBinding = binding
+        hotKey.rebind(to: binding)
+        updateScreenMenu()
+    }
+
+    func rebindAllWindowsHotKey(to binding: HotKeyBinding) {
+        UserDefaults.standard.centerAllBinding = binding
+        allWindowsHotKey.rebind(to: binding)
+        updateScreenMenu()
+    }
+
+    // MARK: - Exclusion list (called by PreferencesWindowController)
+
+    func setExcludedBundleIDs(_ ids: Set<String>) {
+        UserDefaults.standard.excludedBundleIDs = ids
+        observer.excludedBundleIDs = ids
+    }
+
     // MARK: - Screen persistence
 
-    /// Restores the previously selected screen by matching `localizedName`.
-    /// Falls back to `NSScreen.main` if the saved screen is no longer connected.
     private func restoreSelectedScreen() {
         guard let savedName = UserDefaults.standard.selectedScreenName else { return }
         centerer.selectedScreen = NSScreen.screens.first { $0.localizedName == savedName }
-        // Don't persist here — avoid overwriting a valid name with nil if the
-        // screen happens to be temporarily disconnected at launch.
     }
 
-    /// Called when displays are connected, disconnected, or rearranged.
     @objc private func screensDidChange() {
-        let screens = NSScreen.screens
-        // If the selected screen is no longer in the list, reset to main.
-        if let current = centerer.selectedScreen, !screens.contains(current) {
+        if let current = centerer.selectedScreen, !NSScreen.screens.contains(current) {
             logger.debug("Selected screen disconnected — resetting to main")
-            // Update centerer directly (don't persist the fallback as the user's preference).
             centerer.selectedScreen = NSScreen.main
         }
         updateScreenMenu()
@@ -164,34 +167,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func enableApp() {
         guard !isEnabled else { return }
         guard AXIsProcessTrusted() else { showPermissionAlert(); return }
-
         isEnabled = true
-
-        observer.onWindowEvent = { [weak self] window in
-            self?.centerer.center(window: window)
-        }
+        observer.onWindowEvent = { [weak self] window in self?.centerer.center(window: window) }
+        observer.excludedBundleIDs = UserDefaults.standard.excludedBundleIDs
         observer.start()
         hotKey.activate()
         allWindowsHotKey.activate()
-
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
         startPermissionChecks()
     }
 
     @objc func disableApp() {
         guard isEnabled else { return }
-
         isEnabled = false
         observer.stop()
         hotKey.deactivate()
         allWindowsHotKey.deactivate()
         centerer.cancelAnimation()
         stopPermissionChecks()
-
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
-    // MARK: - Manual triggers (menu / hotkey)
+    // MARK: - Manual triggers
 
     @objc func centerActiveWindowManually() {
         guard isEnabled else { return }
@@ -215,20 +212,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         updateScreenMenu()
     }
 
-    private func updateScreenMenu() {
-        let menu  = NSMenu()
+    func updateScreenMenu() {
+        let menu    = NSMenu()
         let screens = NSScreen.screens
-
         guard !screens.isEmpty else { statusItem?.menu = menu; return }
 
-        // --- Screen picker ---
+        // Screen picker
         for (index, screen) in screens.enumerated() {
-            let title = "Screen \(index + 1) - \(Int(screen.frame.width))x\(Int(screen.frame.height))"
-            let item  = NSMenuItem(
-                title: title,
-                action: #selector(selectScreen(_:)),
-                keyEquivalent: ""
-            )
+            let title = "Screen \(index + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))"
+            let item  = NSMenuItem(title: title, action: #selector(selectScreen(_:)), keyEquivalent: "")
             item.tag    = index
             item.state  = (selectedScreen == screen) ? .on : .off
             item.target = self
@@ -237,44 +229,39 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
-        // --- Window commands ---
-        let centerOne = menu.addItem(
-            withTitle: "Center Active Window",
-            action: #selector(centerActiveWindowManually),
-            keyEquivalent: "c"
-        )
-        centerOne.keyEquivalentModifierMask = [.option, .command]
-        centerOne.target = self
+        // Window commands — show current hotkey in title
+        let activeBinding = UserDefaults.standard.centerActiveBinding
+        let allBinding    = UserDefaults.standard.centerAllBinding
 
-        let centerAll = menu.addItem(
-            withTitle: "Center All Windows",
-            action: #selector(centerAllWindowsManually),
-            keyEquivalent: "c"
-        )
-        centerAll.keyEquivalentModifierMask = [.shift, .command]
-        centerAll.target = self
+        let centerOne        = NSMenuItem(title: "Center Active Window  \(activeBinding.displayString)",
+                                          action: #selector(centerActiveWindowManually),
+                                          keyEquivalent: "")
+        centerOne.target     = self
+        menu.addItem(centerOne)
+
+        let centerAll        = NSMenuItem(title: "Center All Windows  \(allBinding.displayString)",
+                                          action: #selector(centerAllWindowsManually),
+                                          keyEquivalent: "")
+        centerAll.target     = self
+        menu.addItem(centerAll)
 
         menu.addItem(.separator())
 
-        // --- Launch at Login toggle ---
+        // Preferences
+        let prefs        = NSMenuItem(title: "Preferences…", action: #selector(openPreferences), keyEquivalent: ",")
+        prefs.target     = self
+        menu.addItem(prefs)
+
+        // Launch at login
         if #available(macOS 13, *) {
-            let loginItem = NSMenuItem(
-                title: "Launch at Login",
-                action: #selector(toggleLaunchAtLogin),
-                keyEquivalent: ""
-            )
-            loginItem.state  = launchAtLogin ? .on : .off
-            loginItem.target = self
+            let loginItem        = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
+            loginItem.state      = launchAtLogin ? .on : .off
+            loginItem.target     = self
             menu.addItem(loginItem)
-            menu.addItem(.separator())
         }
 
-        // --- Quit ---
-        menu.addItem(
-            withTitle: "Quit Centered",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit Centered", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         statusItem?.menu = menu
     }
@@ -282,13 +269,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectScreen(_ sender: NSMenuItem) {
         let screens = NSScreen.screens
         guard sender.tag >= 0, sender.tag < screens.count else { return }
-        selectedScreen = screens[sender.tag]   // persists via the setter
+        selectedScreen = screens[sender.tag]
         updateScreenMenu()
     }
 
-    @objc private func toggleLaunchAtLogin() {
-        launchAtLogin.toggle()
-        // updateScreenMenu() is called inside the launchAtLogin setter.
+    @objc private func toggleLaunchAtLogin() { launchAtLogin.toggle() }
+
+    @objc private func openPreferences() {
+        if preferencesWindowController == nil {
+            preferencesWindowController = PreferencesWindowController(appDelegate: self)
+        }
+        preferencesWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
     }
 
     // MARK: - Permission checks
@@ -297,10 +289,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         permissionTimer?.invalidate()
         let timer = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
             guard let self else { return }
-            if !AXIsProcessTrusted(), self.isEnabled {
-                self.disableApp()
-                self.showPermissionAlert()
-            }
+            if !AXIsProcessTrusted(), self.isEnabled { self.disableApp(); self.showPermissionAlert() }
         }
         RunLoop.main.add(timer, forMode: .common)
         permissionTimer = timer
@@ -310,8 +299,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         permissionTimer?.invalidate()
         permissionTimer = nil
     }
-
-    // MARK: - Helpers
 
     private func showPermissionAlert() {
         let alert = NSAlert()

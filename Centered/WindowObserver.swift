@@ -24,11 +24,17 @@ final class WindowObserver {
 
     var onWindowEvent: ((AXUIElement) -> Void)?
 
-    // MARK: - Private state
-    // Plain stored properties — @MainActor serialises all access.
+    /// Bundle IDs of apps whose window events should be silently ignored.
+    /// Sourced from UserDefaults and refreshed by AppDelegate when the
+    /// exclusion list changes in Preferences.
+    var excludedBundleIDs: Set<String> = UserDefaults.standard.excludedBundleIDs
 
-    private var observers   = [pid_t: AXObserver]()
-    private var isObserving = false
+    // MARK: - Private state
+
+    private var observers    = [pid_t: AXObserver]()
+    /// Maps pid → bundle ID so we can filter without an NSRunningApplication lookup.
+    private var bundleIDs    = [pid_t: String]()
+    private var isObserving  = false
 
     // MARK: - Lifecycle
 
@@ -51,17 +57,14 @@ final class WindowObserver {
         guard isObserving else { return }
         isObserving = false
 
-        // Remove workspace observers first so no new AX observers are added
-        // while we are tearing down.
         let nc = NSWorkspace.shared.notificationCenter
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,   object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
         observers.values.forEach { removeRunLoopSource(for: $0) }
         observers.removeAll()
+        bundleIDs.removeAll()
 
-        // Balance the retained reference taken in addObserver(for:).
-        // Each stored observer corresponds to exactly one passRetained; release them all.
         Unmanaged.passUnretained(self).release()
     }
 
@@ -89,7 +92,6 @@ final class WindowObserver {
         guard AXObserverCreate(pid, observerCallback, &axObserver) == .success,
               let axObserver else { return }
 
-        // passRetained: the C callback will hold this alive across async hops.
         let selfPtr    = Unmanaged.passRetained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
 
@@ -99,13 +101,14 @@ final class WindowObserver {
             AXObserverAddNotification(axObserver, appElement, notifName as CFString, selfPtr)
         }
         addRunLoopSource(for: axObserver)
-        observers[pid] = axObserver
+        observers[pid]  = axObserver
+        bundleIDs[pid]  = app.bundleIdentifier
     }
 
     private func removeObserver(for pid: pid_t) {
         guard let observer = observers.removeValue(forKey: pid) else { return }
+        bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: observer)
-        // Balance the passRetained taken when this observer was added.
         Unmanaged.passUnretained(self).release()
     }
 
@@ -125,22 +128,24 @@ final class WindowObserver {
 
     // MARK: - AX callback entry point
 
-    func handleWindowEvent(_ element: AXUIElement) {
+    func handleWindowEvent(pid: pid_t, element: AXUIElement) {
+        // Silently skip apps on the exclusion list.
+        if let bundleID = bundleIDs[pid], excludedBundleIDs.contains(bundleID) { return }
         onWindowEvent?(element)
     }
 }
 
 // The AXObserverCallback is a plain C function pointer — it cannot carry
 // actor isolation.  It hops to the main actor before touching WindowObserver.
-// The refcon pointer was retained in addObserver(for:); we do NOT release it
-// here because the same retained pointer is reused across multiple notifications
-// for the same observer.  The release happens in removeObserver(for:) / stop().
 private let observerCallback: AXObserverCallback = { _, element, _, refcon in
     guard let refcon,
           CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
     let observer = Unmanaged<WindowObserver>.fromOpaque(refcon).takeUnretainedValue()
     let elem     = element as AXUIElement
+    // Read the pid from the AXUIElement so the main-thread hop can filter by it.
+    var pid: pid_t = 0
+    AXUIElementGetPid(elem, &pid)
     DispatchQueue.main.async {
-        observer.handleWindowEvent(elem)
+        observer.handleWindowEvent(pid: pid, element: elem)
     }
 }
