@@ -13,6 +13,7 @@
 
 import Cocoa
 import ApplicationServices
+import ServiceManagement
 import os.log
 
 private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered",
@@ -58,15 +59,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
     // MARK: - App enabled state
-    // Plain stored property — @MainActor serialises all access.
 
     var isEnabled = false
 
-    // MARK: - Screen selection (forwarded to centerer)
+    // MARK: - Screen selection (forwarded to centerer + persisted)
 
     var selectedScreen: NSScreen? {
         get { centerer.selectedScreen }
-        set { centerer.selectedScreen = newValue }
+        set {
+            centerer.selectedScreen = newValue
+            // Persist by localizedName so it survives relaunches.
+            UserDefaults.standard.selectedScreenName = newValue?.localizedName
+        }
+    }
+
+    // MARK: - Launch at login
+
+    /// Whether the app is registered as a login item via SMAppService.
+    var launchAtLogin: Bool {
+        get {
+            if #available(macOS 13, *) {
+                return SMAppService.mainApp.status == .enabled
+            }
+            return false
+        }
+        set {
+            guard #available(macOS 13, *) else { return }
+            do {
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
+            } catch {
+                logger.debug("SMAppService toggle failed: \(error.localizedDescription, privacy: .public)")
+            }
+            // Rebuild menu so the checkmark reflects the new state.
+            updateScreenMenu()
+        }
     }
 
     // MARK: - Permissions
@@ -77,12 +107,44 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusItem()
+        restoreSelectedScreen()
         requestPermissionsIfNeeded()
         enableApp()
+
+        // Rebuild menu and validate selected screen when display configuration changes.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(screensDidChange),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
+        )
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         disableApp()
+    }
+
+    // MARK: - Screen persistence
+
+    /// Restores the previously selected screen by matching `localizedName`.
+    /// Falls back to `NSScreen.main` if the saved screen is no longer connected.
+    private func restoreSelectedScreen() {
+        guard let savedName = UserDefaults.standard.selectedScreenName else { return }
+        centerer.selectedScreen = NSScreen.screens.first { $0.localizedName == savedName }
+        // Don't persist here — avoid overwriting a valid name with nil if the
+        // screen happens to be temporarily disconnected at launch.
+    }
+
+    /// Called when displays are connected, disconnected, or rearranged.
+    @objc private func screensDidChange() {
+        let screens = NSScreen.screens
+        // If the selected screen is no longer in the list, reset to main.
+        if let current = centerer.selectedScreen, !screens.contains(current) {
+            logger.debug("Selected screen disconnected — resetting to main")
+            // Update centerer directly (don't persist the fallback as the user's preference).
+            centerer.selectedScreen = NSScreen.main
+        }
+        updateScreenMenu()
     }
 
     // MARK: - Permissions
@@ -154,14 +216,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateScreenMenu() {
-        let menu = NSMenu()
+        let menu  = NSMenu()
         let screens = NSScreen.screens
 
         guard !screens.isEmpty else { statusItem?.menu = menu; return }
 
+        // --- Screen picker ---
         for (index, screen) in screens.enumerated() {
             let title = "Screen \(index + 1) - \(Int(screen.frame.width))x\(Int(screen.frame.height))"
-            let item = NSMenuItem(
+            let item  = NSMenuItem(
                 title: title,
                 action: #selector(selectScreen(_:)),
                 keyEquivalent: ""
@@ -174,6 +237,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        // --- Window commands ---
         let centerOne = menu.addItem(
             withTitle: "Center Active Window",
             action: #selector(centerActiveWindowManually),
@@ -191,6 +255,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         centerAll.target = self
 
         menu.addItem(.separator())
+
+        // --- Launch at Login toggle ---
+        if #available(macOS 13, *) {
+            let loginItem = NSMenuItem(
+                title: "Launch at Login",
+                action: #selector(toggleLaunchAtLogin),
+                keyEquivalent: ""
+            )
+            loginItem.state  = launchAtLogin ? .on : .off
+            loginItem.target = self
+            menu.addItem(loginItem)
+            menu.addItem(.separator())
+        }
+
+        // --- Quit ---
         menu.addItem(
             withTitle: "Quit Centered",
             action: #selector(NSApplication.terminate(_:)),
@@ -203,8 +282,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectScreen(_ sender: NSMenuItem) {
         let screens = NSScreen.screens
         guard sender.tag >= 0, sender.tag < screens.count else { return }
-        selectedScreen = screens[sender.tag]
+        selectedScreen = screens[sender.tag]   // persists via the setter
         updateScreenMenu()
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        launchAtLogin.toggle()
+        // updateScreenMenu() is called inside the launchAtLogin setter.
     }
 
     // MARK: - Permission checks
