@@ -2,18 +2,14 @@
 // WindowObserver.swift
 // Centered
 //
-// Watches every regular-activation app via AXObserver and calls the provided
-// callback whenever a window is created, deminiaturized, or focused.
-// AppDelegate owns one instance and starts/stops it as the app is enabled.
+// Watches every regular-activation app via AXObserver and fires `onWindowEvent`
+// whenever a window is created, deminiaturized, or focused — unless the app is
+// on the exclusion list.
 //
-// @MainActor: all mutable state lives on the main actor.  The AXObserverCallback
-// C closure cannot be @MainActor directly, so it hops back to main via
-// DispatchQueue.main.async before touching `self`.
-//
-// The C callback uses a *retained* Unmanaged reference so that if WindowObserver
-// is deallocated after stop() but before a queued main-thread hop executes,
-// the object remains alive for that final dispatch and is then released safely.
-// Each addObserver call balances with a release in removeObserver/stop.
+// Thread model: all mutable state is @MainActor. The AXObserverCallback C
+// function cannot carry actor isolation, so it hops to the main queue before
+// touching `self`. Each addObserver call takes a retained reference to `self`
+// that is released symmetrically in removeObserver / stop().
 //
 
 import Cocoa
@@ -22,19 +18,19 @@ import ApplicationServices
 @MainActor
 final class WindowObserver {
 
+    // MARK: - Public interface
+
     var onWindowEvent: ((AXUIElement) -> Void)?
 
-    /// Bundle IDs of apps whose window events should be silently ignored.
-    /// Sourced from UserDefaults and refreshed by AppDelegate when the
-    /// exclusion list changes in Preferences.
+    /// Updated by AppDelegate whenever the user edits the exclusion list.
     var excludedBundleIDs: Set<String> = UserDefaults.standard.excludedBundleIDs
 
     // MARK: - Private state
 
-    private var observers    = [pid_t: AXObserver]()
-    /// Maps pid → bundle ID so we can filter without an NSRunningApplication lookup.
-    private var bundleIDs    = [pid_t: String]()
-    private var isObserving  = false
+    private var observers   = [pid_t: AXObserver]()
+    /// pid → bundleID cache; avoids NSRunningApplication lookups on every event.
+    private var bundleIDs   = [pid_t: String]()
+    private var isObserving = false
 
     // MARK: - Lifecycle
 
@@ -47,9 +43,9 @@ final class WindowObserver {
             .forEach { addObserver(for: $0) }
 
         let nc = NSWorkspace.shared.notificationCenter
-        nc.addObserver(self, selector: #selector(appLaunched),
-                       name: NSWorkspace.didLaunchApplicationNotification,  object: nil)
-        nc.addObserver(self, selector: #selector(appTerminated),
+        nc.addObserver(self, selector: #selector(appLaunched(_:)),
+                       name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
+        nc.addObserver(self, selector: #selector(appTerminated(_:)),
                        name: NSWorkspace.didTerminateApplicationNotification, object: nil)
     }
 
@@ -57,8 +53,10 @@ final class WindowObserver {
         guard isObserving else { return }
         isObserving = false
 
+        // Unsubscribe workspace notifications before tearing down AX observers
+        // so no new observers are added during teardown.
         let nc = NSWorkspace.shared.notificationCenter
-        nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,   object: nil)
+        nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
         observers.values.forEach { removeRunLoopSource(for: $0) }
@@ -68,17 +66,19 @@ final class WindowObserver {
         Unmanaged.passUnretained(self).release()
     }
 
-    // MARK: - NSWorkspace notifications
+    // MARK: - Workspace notifications
 
-    @objc private func appLaunched(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
-                as? NSRunningApplication else { return }
+    @objc private func appLaunched(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication
+        else { return }
         addObserver(for: app)
     }
 
-    @objc private func appTerminated(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
-                as? NSRunningApplication else { return }
+    @objc private func appTerminated(_ note: Notification) {
+        guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
+                as? NSRunningApplication
+        else { return }
         removeObserver(for: app.processIdentifier)
     }
 
@@ -89,20 +89,22 @@ final class WindowObserver {
         guard observers[pid] == nil else { return }
 
         var axObserver: AXObserver?
-        guard AXObserverCreate(pid, observerCallback, &axObserver) == .success,
-              let axObserver else { return }
+        guard AXObserverCreate(pid, axObserverCallback, &axObserver) == .success,
+              let axObserver
+        else { return }
 
         let selfPtr    = Unmanaged.passRetained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
 
-        for notifName in [kAXWindowCreatedNotification,
-                          kAXWindowDeminiaturizedNotification,
-                          kAXFocusedWindowChangedNotification] {
-            AXObserverAddNotification(axObserver, appElement, notifName as CFString, selfPtr)
+        for name in [kAXWindowCreatedNotification,
+                     kAXWindowDeminiaturizedNotification,
+                     kAXFocusedWindowChangedNotification] {
+            AXObserverAddNotification(axObserver, appElement, name as CFString, selfPtr)
         }
+
         addRunLoopSource(for: axObserver)
-        observers[pid]  = axObserver
-        bundleIDs[pid]  = app.bundleIdentifier
+        observers[pid] = axObserver
+        bundleIDs[pid] = app.bundleIdentifier
     }
 
     private func removeObserver(for pid: pid_t) {
@@ -112,40 +114,35 @@ final class WindowObserver {
         Unmanaged.passUnretained(self).release()
     }
 
-    // MARK: - Run-loop source helpers
+    // MARK: - Run-loop helpers
 
     private func addRunLoopSource(for observer: AXObserver) {
         CFRunLoopAddSource(CFRunLoopGetMain(),
-                           AXObserverGetRunLoopSource(observer),
-                           .defaultMode)
+                           AXObserverGetRunLoopSource(observer), .defaultMode)
     }
 
     private func removeRunLoopSource(for observer: AXObserver) {
         CFRunLoopRemoveSource(CFRunLoopGetMain(),
-                              AXObserverGetRunLoopSource(observer),
-                              .defaultMode)
+                              AXObserverGetRunLoopSource(observer), .defaultMode)
     }
 
-    // MARK: - AX callback entry point
+    // MARK: - Event dispatch
 
     func handleWindowEvent(pid: pid_t, element: AXUIElement) {
-        // Silently skip apps on the exclusion list.
-        if let bundleID = bundleIDs[pid], excludedBundleIDs.contains(bundleID) { return }
+        if let id = bundleIDs[pid], excludedBundleIDs.contains(id) { return }
         onWindowEvent?(element)
     }
 }
 
-// The AXObserverCallback is a plain C function pointer — it cannot carry
-// actor isolation.  It hops to the main actor before touching WindowObserver.
-private let observerCallback: AXObserverCallback = { _, element, _, refcon in
-    guard let refcon,
-          CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
-    let observer = Unmanaged<WindowObserver>.fromOpaque(refcon).takeUnretainedValue()
-    let elem     = element as AXUIElement
-    // Read the pid from the AXUIElement so the main-thread hop can filter by it.
+// MARK: - AX callback
+
+// Plain C function — cannot carry actor isolation. Reads the pid from the
+// element synchronously (safe on any thread), then hops to main.
+private let axObserverCallback: AXObserverCallback = { _, element, _, refcon in
+    guard let refcon, CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
     var pid: pid_t = 0
-    AXUIElementGetPid(elem, &pid)
-    DispatchQueue.main.async {
-        observer.handleWindowEvent(pid: pid, element: elem)
-    }
+    AXUIElementGetPid(element, &pid)
+    let observer = Unmanaged<WindowObserver>.fromOpaque(refcon).takeUnretainedValue()
+    let elem = element as AXUIElement
+    DispatchQueue.main.async { observer.handleWindowEvent(pid: pid, element: elem) }
 }

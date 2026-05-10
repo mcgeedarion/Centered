@@ -3,24 +3,25 @@
 // Centered
 //
 // Typed accessors for every preference key the app persists.
-// Using a dedicated extension avoids stringly-typed key literals scattered
-// across the codebase.
+// All raw key strings live here — nowhere else in the codebase.
 //
 
 import Foundation
 
 extension UserDefaults {
 
+    // MARK: - Keys
+
     private enum Key {
-        static let selectedScreenName  = "selectedScreenName"
-        static let centerActiveHotKey  = "centerActiveHotKey"
-        static let centerAllHotKey     = "centerAllHotKey"
-        static let excludedBundleIDs   = "excludedBundleIDs"
+        static let selectedScreenName = "selectedScreenName"
+        static let centerActiveHotKey = "centerActiveHotKey"
+        static let centerAllHotKey    = "centerAllHotKey"
+        static let excludedBundleIDs  = "excludedBundleIDs"
     }
 
     // MARK: - Screen
 
-    /// The `localizedName` of the user's preferred screen, or `nil` if never set.
+    /// `localizedName` of the user's preferred screen; `nil` if never set.
     var selectedScreenName: String? {
         get { string(forKey: Key.selectedScreenName) }
         set { set(newValue, forKey: Key.selectedScreenName) }
@@ -28,21 +29,23 @@ extension UserDefaults {
 
     // MARK: - Hotkeys
 
-    /// Binding for "Center Active Window". Defaults to ⌘⌥C.
+    /// Binding for "Center Active Window". Falls back to ⌘⌥C if absent.
     var centerActiveBinding: HotKeyBinding {
         get {
             guard let dict = dictionary(forKey: Key.centerActiveHotKey),
-                  let b    = HotKeyBinding(dictionary: dict) else { return .centerActive }
+                  let b    = HotKeyBinding(dictionary: dict)
+            else { return .centerActive }
             return b
         }
         set { set(newValue.dictionaryRepresentation, forKey: Key.centerActiveHotKey) }
     }
 
-    /// Binding for "Center All Windows". Defaults to ⌘⇧C.
+    /// Binding for "Center All Windows". Falls back to ⌘⇧C if absent.
     var centerAllBinding: HotKeyBinding {
         get {
             guard let dict = dictionary(forKey: Key.centerAllHotKey),
-                  let b    = HotKeyBinding(dictionary: dict) else { return .centerAll }
+                  let b    = HotKeyBinding(dictionary: dict)
+            else { return .centerAll }
             return b
         }
         set { set(newValue.dictionaryRepresentation, forKey: Key.centerAllHotKey) }
