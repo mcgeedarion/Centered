@@ -44,6 +44,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }()
 
+    /// ⌘⇧C — centers every non-minimized window of the frontmost app.
+    private lazy var allWindowsHotKey: HotKey = {
+        HotKey(key: .c, modifiers: [.command, .shift]) { [weak self] in
+            guard let self, self.isEnabled else { return }
+            self.centerer.centerAllWindows()
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    }()
+
     // MARK: - Status item
 
     private var statusItem: NSStatusItem?
@@ -101,6 +110,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         observer.start()
         hotKey.activate()
+        allWindowsHotKey.activate()
 
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
         startPermissionChecks()
@@ -112,17 +122,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         isEnabled = false
         observer.stop()
         hotKey.deactivate()
+        allWindowsHotKey.deactivate()
         centerer.cancelAnimation()
         stopPermissionChecks()
 
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
-    // MARK: - Manual trigger (menu / hotkey)
+    // MARK: - Manual triggers (menu / hotkey)
 
     @objc func centerActiveWindowManually() {
         guard isEnabled else { return }
         centerer.centerFrontmost()
+    }
+
+    @objc func centerAllWindowsManually() {
+        guard isEnabled else { return }
+        centerer.centerAllWindows()
     }
 
     // MARK: - Status item / menu
@@ -157,11 +173,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         menu.addItem(.separator())
-        menu.addItem(
+
+        let centerOne = menu.addItem(
             withTitle: "Center Active Window",
             action: #selector(centerActiveWindowManually),
             keyEquivalent: "c"
-        ).target = self
+        )
+        centerOne.keyEquivalentModifierMask = [.option, .command]
+        centerOne.target = self
+
+        let centerAll = menu.addItem(
+            withTitle: "Center All Windows",
+            action: #selector(centerAllWindowsManually),
+            keyEquivalent: "c"
+        )
+        centerAll.keyEquivalentModifierMask = [.shift, .command]
+        centerAll.target = self
 
         menu.addItem(.separator())
         menu.addItem(

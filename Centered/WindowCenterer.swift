@@ -17,6 +17,14 @@ import os.log
 private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered",
                             category: "WindowCenterer")
 
+// MARK: - Animation constants
+
+/// Total number of animation steps.  At kAnimationInterval seconds each this
+/// gives a ~192 ms animation duration.
+private let kAnimationSteps:    Int     = 16
+/// Seconds between each animation frame (~83 fps).
+private let kAnimationInterval: Double  = 0.012
+
 // MARK: - AX helpers (file-private)
 
 /// Casts `object` to `AXUIElement` iff the CF type IDs match.
@@ -62,8 +70,10 @@ final class WindowCenterer {
     var selectedScreen: NSScreen?
 
     // MARK: - Animation state
+    // One active work-item token per in-flight animation.  Cancelling it stops
+    // the recursive step() chain for that window.
 
-    private var animationWorkItem: DispatchWorkItem?
+    private var animationWorkItems: [DispatchWorkItem] = []
     private(set) var isCentering = false
 
     // MARK: - Public entry points
@@ -97,10 +107,29 @@ final class WindowCenterer {
         }
     }
 
-    /// Cancels any in-flight animation and resets centering state.
+    /// Centers every non-minimized window belonging to the frontmost application.
+    /// Each window is animated independently; animations run concurrently.
+    func centerAllWindows() {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+
+        guard let windows = axWindows(appElement), !windows.isEmpty else {
+            // No AX windows — fall back to single-window AppleScript path.
+            centerFrontmostWithAppleScript(app)
+            return
+        }
+
+        for window in windows {
+            // Skip minimized windows; treat unreadable attribute as non-minimized.
+            guard axBool(window, attribute: kAXMinimizedAttribute) != true else { continue }
+            _ = centerViaAX(window: window)
+        }
+    }
+
+    /// Cancels all in-flight animations and resets centering state.
     func cancelAnimation() {
-        animationWorkItem?.cancel()
-        animationWorkItem = nil
+        animationWorkItems.forEach { $0.cancel() }
+        animationWorkItems.removeAll()
         isCentering = false
     }
 
@@ -115,13 +144,18 @@ final class WindowCenterer {
         )
     }
 
-    /// Returns the interpolated position at animation step `i` of `totalSteps`
-    /// between `start` and `end` using linear interpolation.
+    /// Returns the eased position at animation step `i` of `totalSteps` between
+    /// `start` and `end` using a cubic ease-out curve: f(t) = 1 - (1-t)^3.
+    ///
+    /// Ease-out decelerates toward the target, giving the motion a native macOS
+    /// feel (fast start, smooth settle) compared to linear interpolation.
     static func animationPosition(from start: CGPoint,
                                   to end: CGPoint,
                                   step i: Int,
                                   totalSteps: Int) -> CGPoint {
-        let t = CGFloat(i) / CGFloat(totalSteps)
+        let linear = CGFloat(i) / CGFloat(totalSteps)
+        // Cubic ease-out: starts fast, decelerates into the final position.
+        let t = 1.0 - pow(1.0 - linear, 3.0)
         return CGPoint(
             x: start.x + (end.x - start.x) * t,
             y: start.y + (end.y - start.y) * t
@@ -149,28 +183,29 @@ final class WindowCenterer {
         var currentPos = CGPoint()
         AXValueGetValue(posVal, .cgPoint, &currentPos)
 
-        animationWorkItem?.cancel()
         isCentering = true
 
-        let steps    = 10
         let workItem = DispatchWorkItem {}
-        animationWorkItem = workItem
+        animationWorkItems.append(workItem)
 
         func step(_ i: Int) {
-            guard i <= steps, !workItem.isCancelled else {
-                self.isCentering = false
+            guard i <= kAnimationSteps, !workItem.isCancelled else {
+                // Clean up this work item and clear isCentering if nothing else is running.
+                self.animationWorkItems.removeAll { $0 === workItem }
+                if self.animationWorkItems.isEmpty { self.isCentering = false }
                 return
             }
             var pos = WindowCenterer.animationPosition(
-                from: currentPos, to: point, step: i, totalSteps: steps
+                from: currentPos, to: point, step: i, totalSteps: kAnimationSteps
             )
             if let val = AXValueCreate(.cgPoint, &pos) {
                 AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, val)
             }
-            if i < steps {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.015) { step(i + 1) }
+            if i < kAnimationSteps {
+                DispatchQueue.main.asyncAfter(deadline: .now() + kAnimationInterval) { step(i + 1) }
             } else {
-                self.isCentering = false
+                self.animationWorkItems.removeAll { $0 === workItem }
+                if self.animationWorkItems.isEmpty { self.isCentering = false }
             }
         }
         step(1)
@@ -190,7 +225,6 @@ final class WindowCenterer {
 
     private func centerFrontmostWithAppleScript(_ app: NSRunningApplication) {
         guard let bundleId = app.bundleIdentifier else {
-            // No bundle ID available; AX already failed, nothing safe to do.
             logger.debug("Skipping AppleScript fallback: no bundle ID for pid \(app.processIdentifier)")
             return
         }
@@ -198,8 +232,6 @@ final class WindowCenterer {
     }
 
     private func executeAppleScriptCentering(bundleId: String) {
-        // Bundle identifiers are reverse-DNS strings (e.g. com.apple.Safari).
-        // Validate strictly: only allow alphanumerics, dots, and hyphens.
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: ".-"))
         guard bundleId.unicodeScalars.allSatisfy({ allowed.contains($0) }) else {
             logger.debug("Rejected bundle ID with disallowed characters")
