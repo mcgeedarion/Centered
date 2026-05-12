@@ -8,6 +8,11 @@
 // @MainActor: AX callbacks fire on the main run loop; hotkey handlers dispatch
 // to main. The compiler enforces this.
 //
+// AppleScript note:
+//   executeAppleScriptCentering dispatches NSAppleScript.executeAndReturnError
+//   to a background queue because it is a blocking call that can stall the main
+//   run loop for hundreds of milliseconds on slow or busy apps.
+//
 
 import Cocoa
 import ApplicationServices
@@ -26,6 +31,10 @@ private let kAnimationInterval: Double = 0.012
 
 private let kBundleIDAllowedChars: CharacterSet =
     .alphanumerics.union(CharacterSet(charactersIn: ".-"))
+
+/// Dedicated serial queue for blocking AppleScript calls so the main run loop
+/// is never stalled by a slow or unresponsive target application.
+private let appleScriptQueue = DispatchQueue(label: "com.centered.applescript", qos: .userInitiated)
 
 // MARK: - AX helpers
 
@@ -172,6 +181,9 @@ final class WindowCenterer {
         var start = CGPoint()
         AXValueGetValue(posVal, .cgPoint, &start)
 
+        // Skip animation if the window is already at the target position.
+        guard start != target else { return }
+
         isCentering = true
         let token   = DispatchWorkItem {}
         animationWorkItems.append(token)
@@ -183,6 +195,8 @@ final class WindowCenterer {
         }
 
         func step(_ i: Int) {
+            // Validity check before writing: if the window was destroyed between
+            // frames, bail immediately rather than attempting a write.
             guard i <= kAnimationSteps,
                   !token.isCancelled,
                   axIsValid(window)
@@ -251,10 +265,15 @@ final class WindowCenterer {
             end try
         end tell
         """
-        var error: NSDictionary?
-        _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
-        if let error {
-            logger.debug("AppleScript error (\(bundleID, privacy: .public)): \(error)")
+        // NSAppleScript.executeAndReturnError is synchronous and can block for
+        // hundreds of milliseconds. Dispatch to a background queue so the main
+        // run loop — and therefore all UI and AX callbacks — remain responsive.
+        appleScriptQueue.async {
+            var error: NSDictionary?
+            _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
+            if let error {
+                logger.debug("AppleScript error (\(bundleID, privacy: .public)): \(error)")
+            }
         }
     }
 }
