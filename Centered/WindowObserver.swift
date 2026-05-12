@@ -7,24 +7,14 @@
 // on the exclusion list.
 //
 // Thread model: all mutable state is @MainActor. The AXObserverCallback C
-// function cannot carry actor isolation, so it hops to the main queue before
-// touching `self`.
+// function hops to the main queue before touching `self`.
 //
-// Memory safety:
-//   Rather than retaining `self` (WindowObserver) in the C callback's refcon,
-//   we box each observer into an ObserverBox that holds a weak reference back
-//   to the WindowObserver. This eliminates the manual passRetained/release dance
-//   and the associated use-after-free / double-free risks:
+// Memory safety: each registration creates an ObserverBox (retained in refcon)
+// with a weak back-reference to WindowObserver. ARC manages the box lifetime;
+// no manual retain accounting is needed. See ObserverBox below.
 //
-//   - ObserverBox is the only retained object per registration.
-//   - WindowObserver can be deallocated independently — the weak ref goes nil
-//     and the callback safely no-ops.
-//   - No hand-rolled retain counter; ARC manages ObserverBox lifetime.
-//
-// Retry:
-//   AXObserverCreate can fail transiently (e.g. kAXErrorAPIDisabled during
-//   login). Apps that failed are queued in `pendingRetry` and retried up to
-//   kMaxRetryAttempts times with kRetryInterval spacing.
+// Retry: AXObserverCreate can fail transiently (e.g. kAXErrorAPIDisabled during
+// login). Failed apps are retried up to kMaxRetryAttempts times at kRetryInterval.
 //
 
 import Cocoa
@@ -35,9 +25,9 @@ private let kMaxRetryAttempts: Int          = 5
 
 // MARK: - ObserverBox
 
-/// Heap-allocated wrapper that is the sole retained object in the AX callback's
-/// refcon. Holds a weak back-reference to WindowObserver so the callback can
-/// reach it without preventing deallocation.
+/// Sole retained object in the AX callback refcon.
+/// Holds a weak back-reference so the callback can reach WindowObserver
+/// without preventing its deallocation.
 private final class ObserverBox {
     let axObserver: AXObserver
     weak var owner: WindowObserver?
@@ -60,13 +50,9 @@ final class WindowObserver {
 
     // MARK: - Private state
 
-    /// Maps pid → ObserverBox. The box owns the AXObserver and holds a weak
-    /// back-reference to self; no manual retain accounting is needed.
-    private var boxes      = [pid_t: ObserverBox]()
-    private var bundleIDs  = [pid_t: String]()
+    private var boxes       = [pid_t: ObserverBox]()
+    private var bundleIDs   = [pid_t: String]()
     private var isObserving = false
-
-    /// Apps whose AXObserverCreate failed transiently; value = attempts so far.
     private var pendingRetry = [NSRunningApplication: Int]()
     private var retryTimer:  Timer?
 
@@ -99,8 +85,6 @@ final class WindowObserver {
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        // Remove run-loop sources; ARC releases each ObserverBox (and its AXObserver)
-        // automatically once boxes is cleared — no manual release needed.
         boxes.values.forEach { removeRunLoopSource(for: $0.axObserver) }
         boxes.removeAll()
         bundleIDs.removeAll()
@@ -127,7 +111,7 @@ final class WindowObserver {
 
     private func addObserver(for app: NSRunningApplication) {
         let pid = app.processIdentifier
-        guard boxes[pid] == nil else { return }   // already registered — deduplicate
+        guard boxes[pid] == nil else { return }
 
         var axObserver: AXObserver?
         let result = AXObserverCreate(pid, axObserverCallback, &axObserver)
@@ -137,10 +121,7 @@ final class WindowObserver {
             return
         }
 
-        // Box owns the AXObserver; weak ref to self prevents retain cycle and
-        // use-after-free — if WindowObserver is deallocated the callback no-ops.
-        let box = ObserverBox(axObserver, owner: self)
-        // Retain the box for the C callback's lifetime (one retain per observer).
+        let box    = ObserverBox(axObserver, owner: self)
         let boxPtr = Unmanaged.passRetained(box).toOpaque()
 
         let appElement = AXUIElementCreateApplication(pid)
@@ -161,8 +142,6 @@ final class WindowObserver {
         bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: box.axObserver)
         // Balance the passRetained from addObserver.
-        // takeRetainedValue() decrements the retain count by 1, releasing the box
-        // when no other owner holds it.
         _ = Unmanaged<ObserverBox>.passUnretained(box).takeRetainedValue()
     }
 
@@ -190,9 +169,7 @@ final class WindowObserver {
             retryTimer = nil
             return
         }
-        for app in Array(pendingRetry.keys) {
-            addObserver(for: app)
-        }
+        for app in Array(pendingRetry.keys) { addObserver(for: app) }
     }
 
     // MARK: - Run-loop helpers
@@ -217,14 +194,12 @@ final class WindowObserver {
 
 // MARK: - AX callback
 
-/// The refcon is a +1 retained ObserverBox (not the WindowObserver itself).
-/// The callback reaches WindowObserver through the box's weak `owner` reference.
+/// refcon is a +1 retained ObserverBox. The callback reaches WindowObserver
+/// through the box's weak `owner` reference.
 private let axObserverCallback: AXObserverCallback = { _, element, _, refcon in
     guard let refcon, CFGetTypeID(element) == AXUIElementGetTypeID() else { return }
     var pid: pid_t = 0
     AXUIElementGetPid(element, &pid)
-    // takeUnretainedValue: the box remains alive for the duration of this call
-    // because the caller (AX framework) holds the +1 retain from passRetained.
     let box = Unmanaged<ObserverBox>.fromOpaque(refcon).takeUnretainedValue()
     DispatchQueue.main.async { [weak box] in
         box?.owner?.handleWindowEvent(pid: pid, element: element)

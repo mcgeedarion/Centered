@@ -5,21 +5,17 @@
 // All window-centering logic: AX attribute reads, ease-out animation, and the
 // AppleScript fallback path. AppDelegate owns one instance and delegates to it.
 //
-// @MainActor: AX callbacks fire on the main run loop; hotkey handlers dispatch
-// to main. The compiler enforces this.
+// @MainActor: AX callbacks and hotkey handlers both run on the main thread.
 //
 // AppleScript note:
-//   executeAppleScriptCentering dispatches NSAppleScript.executeAndReturnError
-//   to a background queue because it is a synchronous blocking call that can
-//   stall the main run loop for hundreds of milliseconds on slow or busy apps.
+//   executeAppleScriptCentering dispatches to a background queue because
+//   NSAppleScript.executeAndReturnError is synchronous and can stall the
+//   main run loop for hundreds of milliseconds.
 //
-//   SECURITY: The bundleID passed into the AppleScript source string is
-//   validated with three independent checks before interpolation:
-//     1. Character allowlist: only alphanumerics and '.-' are permitted.
-//     2. Length bound: bundle IDs longer than 255 characters are rejected.
-//     3. Cross-verification: the bundle ID is confirmed against the actual
-//        running process via NSRunningApplication, preventing spoof attacks
-//        where a process manipulates its reported bundle ID.
+//   SECURITY: bundle ID is validated with three checks before interpolation:
+//     1. Character allowlist (alphanumerics + '.-')
+//     2. Length bound (≤ 255)
+//     3. Cross-verification against NSRunningApplication to block spoof attacks
 //
 
 import Cocoa
@@ -35,14 +31,12 @@ private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered
 private let kAnimationSteps:    Int    = 16
 private let kAnimationInterval: Double = 0.012
 
-// MARK: - Bundle-ID validation constants
+// MARK: - Bundle-ID validation
 
 private let kBundleIDAllowedChars: CharacterSet =
     .alphanumerics.union(CharacterSet(charactersIn: ".-"))
 private let kBundleIDMaxLength: Int = 255
 
-/// Dedicated serial queue for blocking AppleScript calls so the main run loop
-/// is never stalled by a slow or unresponsive target application.
 private let appleScriptQueue = DispatchQueue(label: "com.centered.applescript", qos: .userInitiated)
 
 // MARK: - AX helpers
@@ -76,7 +70,6 @@ private func axElementAttr(_ element: AXUIElement, attribute: String) -> AXUIEle
     return axElement(value)
 }
 
-/// Returns true if `element` still refers to a live UI element.
 private func axIsValid(_ element: AXUIElement) -> Bool {
     var raw: AnyObject?
     let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw)
@@ -87,8 +80,6 @@ private func axIsValid(_ element: AXUIElement) -> Bool {
 
 @MainActor
 final class WindowCenterer {
-
-    // MARK: Properties
 
     var selectedScreen: NSScreen?
     private(set) var isCentering = false
@@ -140,14 +131,13 @@ final class WindowCenterer {
         if anyFailed { centerFrontmostWithAppleScript(app) }
     }
 
-    /// Cancels all in-flight animations immediately.
     func cancelAnimation() {
         animationWorkItems.forEach { $0.cancel() }
         animationWorkItems.removeAll()
         isCentering = false
     }
 
-    // MARK: - Geometry (static — usable from tests)
+    // MARK: - Geometry
 
     static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
         CGPoint(x: screenRect.midX - windowSize.width  / 2,
@@ -238,21 +228,14 @@ final class WindowCenterer {
     }
 
     private func executeAppleScriptCentering(bundleID: String, app: NSRunningApplication) {
-        // SECURITY check 1: character allowlist — only alphanumerics and '.-'.
         guard bundleID.unicodeScalars.allSatisfy({ kBundleIDAllowedChars.contains($0) }) else {
             logger.debug("Rejected bundle ID with disallowed characters")
             return
         }
-
-        // SECURITY check 2: length bound — real bundle IDs are never >255 chars.
         guard bundleID.count <= kBundleIDMaxLength, !bundleID.isEmpty else {
             logger.debug("Rejected bundle ID with invalid length")
             return
         }
-
-        // SECURITY check 3: cross-verify the bundle ID against the actual running
-        // process. This prevents a rogue process from spoofing its bundle ID in
-        // Info.plist to hijack the AppleScript path.
         guard NSRunningApplication
                 .runningApplications(withBundleIdentifier: bundleID)
                 .contains(where: { $0.processIdentifier == app.processIdentifier })

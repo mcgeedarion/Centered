@@ -51,8 +51,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private var preferencesWindowController: PreferencesWindowController?
-    // Legacy polling timer retained only as a fallback if the distributed
-    // notification is unavailable (e.g. running under a stripped sandbox).
     private var permissionTimer: Timer?
     private(set) var isEnabled = false
 
@@ -198,6 +196,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status bar menu
 
+    // Sections are tagged so only the affected section needs rebuilding:
+    //   1xx — screen items  |  2xx — action items  |  3xx — quit
     private enum MenuSection: Int {
         case screens = 100, actions = 200, system = 300
     }
@@ -327,34 +327,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permission checks
 
-    // Primary: Darwin distributed notification on "com.apple.accessibility.api".
-    // This fires within milliseconds of TCC trust being revoked — far better
-    // than the previous 30-second polling timer.
-    //
-    // Fallback: a 60-second timer catches any edge cases where the notification
-    // is not delivered (e.g. very early in boot, or unusual system states).
-    // The interval is doubled from the original 30 s because the notification
-    // already handles the common case promptly.
-
+    // Primary: CFNotificationCenter distributed observer on "com.apple.accessibility.api"
+    // fires within milliseconds of TCC revocation.
+    // Fallback: 60-second timer for edge cases where the notification is not delivered.
     private func startPermissionChecks() {
-        stopPermissionChecks()  // clear any existing observers before re-adding
+        stopPermissionChecks()
 
-        // Primary: instant notification on TCC change.
-        let name     = "com.apple.accessibility.api" as CFString
-        let selfPtr  = Unmanaged.passUnretained(self).toOpaque()
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDistributedCenter(),
             selfPtr,
             accessibilityChangedCallback,
-            name,
+            "com.apple.accessibility.api" as CFString,
             nil,
             .deliverImmediately
         )
 
-        // Fallback: 60-second timer.
         let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            guard !AXIsProcessTrusted() else { return }
+            guard let self, !AXIsProcessTrusted() else { return }
             self.disableApp()
             self.showPermissionAlert()
         }
@@ -365,19 +355,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopPermissionChecks() {
         permissionTimer?.invalidate()
         permissionTimer = nil
-
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         CFNotificationCenterRemoveObserver(
             CFNotificationCenterGetDistributedCenter(),
-            selfPtr,
+            Unmanaged.passUnretained(self).toOpaque(),
             "com.apple.accessibility.api" as CFString,
             nil
         )
     }
 
-    // Called from the C notification callback on the main thread.
     func handleAccessibilityTrustChange() {
-        guard !AXIsProcessTrusted() else { return }   // trust still valid
+        guard !AXIsProcessTrusted() else { return }
         disableApp()
         showPermissionAlert()
     }
@@ -402,12 +389,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - CFNotification callback (C function)
+// MARK: - CFNotification callback
 
-/// Fires on the main thread when com.apple.accessibility.api changes.
-/// Reaches AppDelegate through the unretained observer pointer registered
-/// in startPermissionChecks. Safe because the observer is always removed
-/// in stopPermissionChecks before AppDelegate can be deallocated.
 private let accessibilityChangedCallback: CFNotificationCallback = { _, observer, _, _, _ in
     guard let observer else { return }
     let delegate = Unmanaged<AppDelegate>.fromOpaque(observer).takeUnretainedValue()

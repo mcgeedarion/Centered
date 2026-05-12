@@ -2,15 +2,11 @@
 // HotKey.swift
 // Centered
 //
-// Global hotkeys implemented via Carbon RegisterEventHotKey.
-// Unlike NSEvent.addGlobalMonitorForEvents, Carbon hotkeys are delivered only
-// when the exact registered combination fires — the OS never passes any other
-// keystrokes to this process, eliminating the keylogger surface entirely.
+// Global hotkeys via Carbon RegisterEventHotKey. Only the exact registered
+// combination is ever delivered — no other keystrokes pass through this process.
 //
-// Threading:
-//   activate / deactivate / rebind must be called on @MainActor.
-//   The Carbon event handler fires on the main thread (GetApplicationEventTarget).
-//   deinit is nonisolated — it captures hotKeyRef locally and unregisters safely.
+// activate / deactivate / rebind must be called on @MainActor.
+// The Carbon event handler fires on the main thread (GetApplicationEventTarget).
 //
 
 import Cocoa
@@ -54,8 +50,7 @@ struct HotKeyBinding: Equatable {
         return s
     }
 
-    /// Converts NSEvent modifier flags to the Carbon modifier mask expected by
-    /// RegisterEventHotKey. Only the standard four modifiers are mapped.
+    /// NSEvent modifier flags converted to the Carbon mask for RegisterEventHotKey.
     var carbonModifiers: UInt32 {
         var mask: UInt32 = 0
         let m = modifiers.intersection(.deviceIndependentFlagsMask)
@@ -67,7 +62,7 @@ struct HotKeyBinding: Equatable {
     }
 }
 
-// MARK: - Key-code display table (built once at file scope)
+// MARK: - Key-code display table
 
 private let kKeyDisplayTable: [UInt16: String] = {
     var t = [UInt16: String]()
@@ -100,24 +95,20 @@ private func keyCodeDisplayString(_ keyCode: UInt16) -> String {
 private var _nextHotKeyID: UInt32 = 1
 private func nextHotKeyID() -> EventHotKeyID {
     defer { _nextHotKeyID &+= 1 }
-    // 'Cent' as OSType signature
-    return EventHotKeyID(signature: 0x43656E74, id: _nextHotKeyID)
+    return EventHotKeyID(signature: 0x43656E74 /* 'Cent' */, id: _nextHotKeyID)
 }
 
 // MARK: - HotKey
 
-/// Installs a system-wide hotkey via Carbon RegisterEventHotKey.
-/// Only the exact key+modifier combination is ever delivered — no other
-/// keystrokes pass through this process, unlike NSEvent global monitors.
 @MainActor
 final class HotKey {
 
     private(set) var binding: HotKeyBinding
     var keyDownHandler: (() -> Void)?
 
-    private var hotKeyRef:    EventHotKeyRef?
-    private var handlerRef:   EventHandlerRef?
-    private var hotKeyID:     EventHotKeyID
+    private var hotKeyRef:  EventHotKeyRef?
+    private var handlerRef: EventHandlerRef?
+    private var hotKeyID:   EventHotKeyID
     private var isActive = false
 
     init(binding: HotKeyBinding, handler: (() -> Void)? = nil) {
@@ -144,22 +135,14 @@ final class HotKey {
         guard binding != newBinding else { return }
         let wasActive = isActive
         if wasActive { deactivate() }
-        binding   = newBinding
-        hotKeyID  = nextHotKeyID()   // fresh ID avoids stale matches
+        binding  = newBinding
+        hotKeyID = nextHotKeyID()   // fresh ID avoids stale matches
         if wasActive { activate() }
     }
 
-    nonisolated deinit {
-        // Captured locally — no actor-isolated property access.
-        // UnregisterEventHotKey and RemoveEventHandler are safe to call
-        // from any thread per Carbon documentation.
-        // Note: hotKeyRef / handlerRef are MainActor-isolated stored properties;
-        // in practice deinit only runs after the last reference is dropped,
-        // which for @MainActor objects happens on the main thread, so this
-        // is safe. We suppress the warning with a nonisolated deinit
-        // that does NOT access stored properties — cleanup must happen
-        // via explicit deactivate() before release.
-    }
+    /// Cleanup must happen via explicit deactivate() before the last reference
+    /// is dropped. nonisolated deinit intentionally does not touch stored properties.
+    nonisolated deinit {}
 
     // MARK: - Carbon internals
 
@@ -169,9 +152,7 @@ final class HotKey {
             eventClass: OSType(kEventClassKeyboard),
             eventKind:  OSType(kEventHotKeyPressed)
         )
-        // Pass an unretained pointer to self as userData. The handler only fires
-        // while hotKeyRef is registered (i.e. while isActive == true and self
-        // is alive), so no retain is needed.
+        // Unretained: the handler only fires while hotKeyRef is registered and self is alive.
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         InstallEventHandler(
             GetApplicationEventTarget(),
@@ -208,8 +189,6 @@ final class HotKey {
         }
     }
 
-    // Called from the C callback — must be @MainActor since the Carbon handler
-    // fires on the main thread (GetApplicationEventTarget).
     func handleCarbonEvent(_ event: EventRef) {
         var firedID = EventHotKeyID()
         GetEventParameter(
@@ -228,13 +207,10 @@ final class HotKey {
     }
 }
 
-// MARK: - Carbon callback (C function)
+// MARK: - Carbon callback
 
-/// Top-level C function required by InstallEventHandler.
-/// Hops are unnecessary — GetApplicationEventTarget always fires on the main thread.
 private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
     guard let event, let userData else { return noErr }
-    let hotKey = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
-    hotKey.handleCarbonEvent(event)
+    Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue().handleCarbonEvent(event)
     return noErr
 }
