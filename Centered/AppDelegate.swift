@@ -200,6 +200,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     //   tag 2xx — action items (center, preferences, launch-at-login)
     //   tag 3xx — quit
     // Separators between sections are fixed and never replaced.
+    //
+    // Screen items store the screen's localizedName in representedObject
+    // so selectScreen(_:) can look the screen up by name rather than
+    // reversing an index from a tag. This is robust to future tag-range
+    // changes and avoids implicit arithmetic.
 
     private enum MenuSection: Int {
         case screens = 100, actions = 200, system = 300
@@ -232,8 +237,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         removeItems(taggedIn: MenuSection.screens.rawValue ..< MenuSection.actions.rawValue, from: menu)
         let sep = menu.items.first(where: { $0.isSeparatorItem })
         let insertIdx = sep.map { menu.index(of: $0) } ?? 0
-        let newItems = makeScreenItems()
-        for (offset, item) in newItems.enumerated() {
+        for (offset, item) in makeScreenItems().enumerated() {
             menu.insertItem(item, at: insertIdx + offset)
         }
     }
@@ -242,16 +246,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildActionsSection() {
         guard let menu = statusItem?.menu else { buildFullMenu(); return }
         removeItems(taggedIn: MenuSection.actions.rawValue ..< MenuSection.system.rawValue, from: menu)
-        // Find the separator that follows the screen section.
         let seps = menu.items.filter { $0.isSeparatorItem }
-        let insertIdx: Int
-        if let firstSep = seps.first {
-            insertIdx = menu.index(of: firstSep) + 1
-        } else {
-            insertIdx = menu.numberOfItems
-        }
-        let newItems = makeActionItems()
-        for (offset, item) in newItems.enumerated() {
+        let insertIdx = seps.first.map { menu.index(of: $0) + 1 } ?? menu.numberOfItems
+        for (offset, item) in makeActionItems().enumerated() {
             menu.insertItem(item, at: insertIdx + offset)
         }
     }
@@ -259,16 +256,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Menu item factories
 
     private func makeScreenItems() -> [NSMenuItem] {
-        let screens = NSScreen.screens
-        return screens.enumerated().map { i, screen in
+        NSScreen.screens.enumerated().map { i, screen in
             let item = NSMenuItem(
                 title:         "Screen \(i + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))",
                 action:        #selector(selectScreen(_:)),
                 keyEquivalent: ""
             )
-            item.tag    = MenuSection.screens.rawValue + i
-            item.state  = (selectedScreen == screen) ? .on : .off
-            item.target = self
+            item.tag               = MenuSection.screens.rawValue + i
+            item.state             = (selectedScreen == screen) ? .on : .off
+            item.target            = self
+            // Store name so selectScreen can look up the screen without index arithmetic.
+            item.representedObject = screen.localizedName
             return item
         }
     }
@@ -331,10 +329,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func selectScreen(_ sender: NSMenuItem) {
-        let screens = NSScreen.screens
-        let idx = sender.tag - MenuSection.screens.rawValue
-        guard idx >= 0, idx < screens.count else { return }
-        selectedScreen = screens[idx]
+        // Look up by localizedName stored in representedObject — no tag arithmetic.
+        guard let name = sender.representedObject as? String else { return }
+        selectedScreen = NSScreen.screens.first { $0.localizedName == name }
         rebuildScreenSection()
     }
 
@@ -350,11 +347,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permission checks
 
+    // The timer fires every 30 s while the app is enabled. Once we confirm that
+    // AX trust is still valid we do nothing — the timer keeps running so we
+    // catch future revocations. If trust is lost we disable the app, show the
+    // alert, and stop the timer (it will restart if the user re-enables).
     private func startPermissionChecks() {
         permissionTimer?.invalidate()
         let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
-            guard let self, !AXIsProcessTrusted(), isEnabled else { return }
-            disableApp()
+            guard let self else { return }
+            guard !AXIsProcessTrusted() else { return }   // still trusted — nothing to do
+            // Trust was revoked: shut down and prompt the user.
+            disableApp()          // also calls stopPermissionChecks(), invalidating this timer
             showPermissionAlert()
         }
         RunLoop.main.add(t, forMode: .common)
