@@ -22,7 +22,6 @@ class ViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         updateUI()
-        // Observe both app-state changes and hotkey fires so the UI stays in sync.
         let nc = NotificationCenter.default
         nc.addObserver(self, selector: #selector(updateUI), name: .appStateChanged, object: nil)
         nc.addObserver(self, selector: #selector(updateUI), name: .hotkeyPressed,   object: nil)
@@ -34,7 +33,6 @@ class ViewController: NSViewController {
     }
 
     deinit {
-        // Removes all observers registered by this instance in one call.
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -48,15 +46,9 @@ class ViewController: NSViewController {
 
     // MARK: - UI update
 
+    // @MainActor guarantees this always runs on the main thread — the
+    // Thread.isMainThread branch in the previous version was redundant.
     @objc private func updateUI() {
-        if Thread.isMainThread {
-            applyUI()
-        } else {
-            DispatchQueue.main.async { [weak self] in self?.applyUI() }
-        }
-    }
-
-    private func applyUI() {
         guard let enabled = appDelegate?.isEnabled else {
             toggleSwitch.isEnabled = false
             setStatus(symbol: "circle.fill", description: "Unknown", color: .gray)

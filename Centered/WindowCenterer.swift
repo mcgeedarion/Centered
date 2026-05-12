@@ -10,8 +10,13 @@
 //
 // AppleScript note:
 //   executeAppleScriptCentering dispatches NSAppleScript.executeAndReturnError
-//   to a background queue because it is a blocking call that can stall the main
-//   run loop for hundreds of milliseconds on slow or busy apps.
+//   to a background queue because it is a synchronous blocking call that can
+//   stall the main run loop for hundreds of milliseconds on slow or busy apps.
+//
+//   SECURITY: The bundleID passed into the AppleScript source string is
+//   sanitised against kBundleIDAllowedChars (.alphanumerics + ".-") before
+//   interpolation. That allowlist is the *only* thing preventing script
+//   injection — do not remove or relax it.
 //
 
 import Cocoa
@@ -237,6 +242,8 @@ final class WindowCenterer {
     }
 
     private func executeAppleScriptCentering(bundleID: String) {
+        // SECURITY: bundleID is validated against kBundleIDAllowedChars before
+        // being interpolated into the script string. Do not remove this check.
         guard bundleID.unicodeScalars.allSatisfy({ kBundleIDAllowedChars.contains($0) }) else {
             logger.debug("Rejected bundle ID with disallowed characters")
             return
