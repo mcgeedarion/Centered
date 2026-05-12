@@ -51,6 +51,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private var preferencesWindowController: PreferencesWindowController?
+    // Legacy polling timer retained only as a fallback if the distributed
+    // notification is unavailable (e.g. running under a stripped sandbox).
     private var permissionTimer: Timer?
     private(set) var isEnabled = false
 
@@ -123,7 +125,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Preferences window
 
-    /// Called by PreferencesWindowController via NSWindowDelegate when closing.
     func preferencesWindowDidClose() {
         preferencesWindowController = nil
     }
@@ -131,7 +132,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Screen persistence
 
     private func restoreSelectedScreen() {
-        guard let name = UserDefaults.standard.selectedScreenName else { return }
+        guard let name = UserDefaults.standard.selectedScreenName,
+              !name.isEmpty,
+              name.count <= 256
+        else { return }
         centerer.selectedScreen = NSScreen.screens.first { $0.localizedName == name }
     }
 
@@ -194,18 +198,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status bar menu
 
-    // The menu is divided into three tagged sections so only the affected
-    // section needs to be rebuilt when state changes:
-    //   tag 1xx — screen items
-    //   tag 2xx — action items (center, preferences, launch-at-login)
-    //   tag 3xx — quit
-    // Separators between sections are fixed and never replaced.
-    //
-    // Screen items store the screen's localizedName in representedObject
-    // so selectScreen(_:) can look the screen up by name rather than
-    // reversing an index from a tag. This is robust to future tag-range
-    // changes and avoids implicit arithmetic.
-
     private enum MenuSection: Int {
         case screens = 100, actions = 200, system = 300
     }
@@ -220,7 +212,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         buildFullMenu()
     }
 
-    /// Builds the complete menu from scratch (called once at startup).
     private func buildFullMenu() {
         let menu = NSMenu()
         appendScreenItems(to: menu)
@@ -231,7 +222,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem?.menu = menu
     }
 
-    /// Replaces only the screen items (tags 100…) in the existing menu.
     private func rebuildScreenSection() {
         guard let menu = statusItem?.menu else { buildFullMenu(); return }
         removeItems(taggedIn: MenuSection.screens.rawValue ..< MenuSection.actions.rawValue, from: menu)
@@ -242,7 +232,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Replaces only the action items (tags 200…) in the existing menu.
     private func rebuildActionsSection() {
         guard let menu = statusItem?.menu else { buildFullMenu(); return }
         removeItems(taggedIn: MenuSection.actions.rawValue ..< MenuSection.system.rawValue, from: menu)
@@ -252,8 +241,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             menu.insertItem(item, at: insertIdx + offset)
         }
     }
-
-    // MARK: Menu item factories
 
     private func makeScreenItems() -> [NSMenuItem] {
         NSScreen.screens.enumerated().map { i, screen in
@@ -265,7 +252,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             item.tag               = MenuSection.screens.rawValue + i
             item.state             = (selectedScreen == screen) ? .on : .off
             item.target            = self
-            // Store name so selectScreen can look up the screen without index arithmetic.
             item.representedObject = screen.localizedName
             return item
         }
@@ -304,13 +290,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return items
     }
 
-    private func appendScreenItems(to menu: NSMenu) {
-        makeScreenItems().forEach { menu.addItem($0) }
-    }
-
-    private func appendActionItems(to menu: NSMenu) {
-        makeActionItems().forEach { menu.addItem($0) }
-    }
+    private func appendScreenItems(to menu: NSMenu)  { makeScreenItems().forEach  { menu.addItem($0) } }
+    private func appendActionItems(to menu: NSMenu)  { makeActionItems().forEach  { menu.addItem($0) } }
 
     private func appendSystemItems(to menu: NSMenu) {
         let quit = NSMenuItem(
@@ -329,7 +310,6 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func selectScreen(_ sender: NSMenuItem) {
-        // Look up by localizedName stored in representedObject — no tag arithmetic.
         guard let name = sender.representedObject as? String else { return }
         selectedScreen = NSScreen.screens.first { $0.localizedName == name }
         rebuildScreenSection()
@@ -347,18 +327,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Permission checks
 
-    // The timer fires every 30 s while the app is enabled. Once we confirm that
-    // AX trust is still valid we do nothing — the timer keeps running so we
-    // catch future revocations. If trust is lost we disable the app, show the
-    // alert, and stop the timer (it will restart if the user re-enables).
+    // Primary: Darwin distributed notification on "com.apple.accessibility.api".
+    // This fires within milliseconds of TCC trust being revoked — far better
+    // than the previous 30-second polling timer.
+    //
+    // Fallback: a 60-second timer catches any edge cases where the notification
+    // is not delivered (e.g. very early in boot, or unusual system states).
+    // The interval is doubled from the original 30 s because the notification
+    // already handles the common case promptly.
+
     private func startPermissionChecks() {
-        permissionTimer?.invalidate()
-        let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in
+        stopPermissionChecks()  // clear any existing observers before re-adding
+
+        // Primary: instant notification on TCC change.
+        let name     = "com.apple.accessibility.api" as CFString
+        let selfPtr  = Unmanaged.passUnretained(self).toOpaque()
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDistributedCenter(),
+            selfPtr,
+            accessibilityChangedCallback,
+            name,
+            nil,
+            .deliverImmediately
+        )
+
+        // Fallback: 60-second timer.
+        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
             guard let self else { return }
-            guard !AXIsProcessTrusted() else { return }   // still trusted — nothing to do
-            // Trust was revoked: shut down and prompt the user.
-            disableApp()          // also calls stopPermissionChecks(), invalidating this timer
-            showPermissionAlert()
+            guard !AXIsProcessTrusted() else { return }
+            self.disableApp()
+            self.showPermissionAlert()
         }
         RunLoop.main.add(t, forMode: .common)
         permissionTimer = t
@@ -367,6 +365,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopPermissionChecks() {
         permissionTimer?.invalidate()
         permissionTimer = nil
+
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDistributedCenter(),
+            selfPtr,
+            "com.apple.accessibility.api" as CFString,
+            nil
+        )
+    }
+
+    // Called from the C notification callback on the main thread.
+    func handleAccessibilityTrustChange() {
+        guard !AXIsProcessTrusted() else { return }   // trust still valid
+        disableApp()
+        showPermissionAlert()
     }
 
     private func showPermissionAlert() {
@@ -387,4 +400,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         item.target = self
         return item
     }
+}
+
+// MARK: - CFNotification callback (C function)
+
+/// Fires on the main thread when com.apple.accessibility.api changes.
+/// Reaches AppDelegate through the unretained observer pointer registered
+/// in startPermissionChecks. Safe because the observer is always removed
+/// in stopPermissionChecks before AppDelegate can be deallocated.
+private let accessibilityChangedCallback: CFNotificationCallback = { _, observer, _, _, _ in
+    guard let observer else { return }
+    let delegate = Unmanaged<AppDelegate>.fromOpaque(observer).takeUnretainedValue()
+    DispatchQueue.main.async { delegate.handleAccessibilityTrustChange() }
 }

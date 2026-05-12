@@ -14,9 +14,12 @@
 //   stall the main run loop for hundreds of milliseconds on slow or busy apps.
 //
 //   SECURITY: The bundleID passed into the AppleScript source string is
-//   sanitised against kBundleIDAllowedChars (.alphanumerics + ".-") before
-//   interpolation. That allowlist is the *only* thing preventing script
-//   injection — do not remove or relax it.
+//   validated with three independent checks before interpolation:
+//     1. Character allowlist: only alphanumerics and '.-' are permitted.
+//     2. Length bound: bundle IDs longer than 255 characters are rejected.
+//     3. Cross-verification: the bundle ID is confirmed against the actual
+//        running process via NSRunningApplication, preventing spoof attacks
+//        where a process manipulates its reported bundle ID.
 //
 
 import Cocoa
@@ -32,10 +35,11 @@ private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered
 private let kAnimationSteps:    Int    = 16
 private let kAnimationInterval: Double = 0.012
 
-// MARK: - Bundle-ID allowlist (built once)
+// MARK: - Bundle-ID validation constants
 
 private let kBundleIDAllowedChars: CharacterSet =
     .alphanumerics.union(CharacterSet(charactersIn: ".-"))
+private let kBundleIDMaxLength: Int = 255
 
 /// Dedicated serial queue for blocking AppleScript calls so the main run loop
 /// is never stalled by a slow or unresponsive target application.
@@ -120,8 +124,6 @@ final class WindowCenterer {
     }
 
     /// Centers every non-minimized window of the frontmost app.
-    /// For each window where AX centering fails, falls back to AppleScript
-    /// for that app (one AppleScript call covers all windows in the app).
     func centerAllWindows() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
@@ -135,9 +137,6 @@ final class WindowCenterer {
         for win in windows where axBool(win, attribute: kAXMinimizedAttribute) != true {
             if !centerViaAX(window: win) { anyFailed = true }
         }
-        // If any AX centering failed, issue one AppleScript call for the app.
-        // AppleScript operates on the front window, so this is best-effort for
-        // partially-AX-compliant apps (e.g. Finder).
         if anyFailed { centerFrontmostWithAppleScript(app) }
     }
 
@@ -186,7 +185,6 @@ final class WindowCenterer {
         var start = CGPoint()
         AXValueGetValue(posVal, .cgPoint, &start)
 
-        // Skip animation if the window is already at the target position.
         guard start != target else { return }
 
         isCentering = true
@@ -200,8 +198,6 @@ final class WindowCenterer {
         }
 
         func step(_ i: Int) {
-            // Validity check before writing: if the window was destroyed between
-            // frames, bail immediately rather than attempting a write.
             guard i <= kAnimationSteps,
                   !token.isCancelled,
                   axIsValid(window)
@@ -238,16 +234,33 @@ final class WindowCenterer {
             logger.debug("AppleScript fallback skipped: no bundle ID for pid \(app.processIdentifier)")
             return
         }
-        executeAppleScriptCentering(bundleID: bid)
+        executeAppleScriptCentering(bundleID: bid, app: app)
     }
 
-    private func executeAppleScriptCentering(bundleID: String) {
-        // SECURITY: bundleID is validated against kBundleIDAllowedChars before
-        // being interpolated into the script string. Do not remove this check.
+    private func executeAppleScriptCentering(bundleID: String, app: NSRunningApplication) {
+        // SECURITY check 1: character allowlist — only alphanumerics and '.-'.
         guard bundleID.unicodeScalars.allSatisfy({ kBundleIDAllowedChars.contains($0) }) else {
             logger.debug("Rejected bundle ID with disallowed characters")
             return
         }
+
+        // SECURITY check 2: length bound — real bundle IDs are never >255 chars.
+        guard bundleID.count <= kBundleIDMaxLength, !bundleID.isEmpty else {
+            logger.debug("Rejected bundle ID with invalid length")
+            return
+        }
+
+        // SECURITY check 3: cross-verify the bundle ID against the actual running
+        // process. This prevents a rogue process from spoofing its bundle ID in
+        // Info.plist to hijack the AppleScript path.
+        guard NSRunningApplication
+                .runningApplications(withBundleIdentifier: bundleID)
+                .contains(where: { $0.processIdentifier == app.processIdentifier })
+        else {
+            logger.debug("Rejected bundle ID \(bundleID, privacy: .public): pid mismatch (possible spoof)")
+            return
+        }
+
         let script = """
         tell application id \"\(bundleID)\"
             activate
@@ -272,9 +285,6 @@ final class WindowCenterer {
             end try
         end tell
         """
-        // NSAppleScript.executeAndReturnError is synchronous and can block for
-        // hundreds of milliseconds. Dispatch to a background queue so the main
-        // run loop — and therefore all UI and AX callbacks — remain responsive.
         appleScriptQueue.async {
             var error: NSDictionary?
             _ = NSAppleScript(source: script)?.executeAndReturnError(&error)

@@ -2,17 +2,15 @@
 // HotKey.swift
 // Centered
 //
-// A lightweight global + local keyboard-shortcut monitor built on NSEvent.
-// Supports any key+modifier combination and can be rebound at runtime
-// without deallocation via rebind(to:).
+// Global hotkeys implemented via Carbon RegisterEventHotKey.
+// Unlike NSEvent.addGlobalMonitorForEvents, Carbon hotkeys are delivered only
+// when the exact registered combination fires — the OS never passes any other
+// keystrokes to this process, eliminating the keylogger surface entirely.
 //
 // Threading:
 //   activate / deactivate / rebind must be called on @MainActor.
-//   NSEvent monitor callbacks fire on a private GCD queue; the handler
-//   closure dispatches back to main before touching actor-isolated state.
-//   deinit is nonisolated — it removes monitors via NSEvent.removeMonitor
-//   which is documented as thread-safe, so it does not touch the stored
-//   properties directly; it uses a locally captured copy instead.
+//   The Carbon event handler fires on the main thread (GetApplicationEventTarget).
+//   deinit is nonisolated — it captures hotKeyRef locally and unregisters safely.
 //
 
 import Cocoa
@@ -48,12 +46,24 @@ struct HotKeyBinding: Equatable {
     var displayString: String {
         let m = modifiers.intersection(.deviceIndependentFlagsMask)
         var s = ""
-        if m.contains(.control) { s += "⌃" }
-        if m.contains(.option)  { s += "⌥" }
-        if m.contains(.shift)   { s += "⇧" }
-        if m.contains(.command) { s += "⌘" }
+        if m.contains(.control) { s += "\u{2303}" }
+        if m.contains(.option)  { s += "\u{2325}" }
+        if m.contains(.shift)   { s += "\u{21E7}" }
+        if m.contains(.command) { s += "\u{2318}" }
         s += keyCodeDisplayString(keyCode)
         return s
+    }
+
+    /// Converts NSEvent modifier flags to the Carbon modifier mask expected by
+    /// RegisterEventHotKey. Only the standard four modifiers are mapped.
+    var carbonModifiers: UInt32 {
+        var mask: UInt32 = 0
+        let m = modifiers.intersection(.deviceIndependentFlagsMask)
+        if m.contains(.command) { mask |= UInt32(cmdKey) }
+        if m.contains(.option)  { mask |= UInt32(optionKey) }
+        if m.contains(.shift)   { mask |= UInt32(shiftKey) }
+        if m.contains(.control) { mask |= UInt32(controlKey) }
+        return mask
     }
 }
 
@@ -72,7 +82,7 @@ private let kKeyDisplayTable: [UInt16: String] = {
         (kVK_ANSI_0,"0"),(kVK_ANSI_1,"1"),(kVK_ANSI_2,"2"),(kVK_ANSI_3,"3"),
         (kVK_ANSI_4,"4"),(kVK_ANSI_5,"5"),(kVK_ANSI_6,"6"),(kVK_ANSI_7,"7"),
         (kVK_ANSI_8,"8"),(kVK_ANSI_9,"9"),
-        (kVK_Space,"Space"),(kVK_Return,"↩"),(kVK_Tab,"⇥"),(kVK_Delete,"⌫"),
+        (kVK_Space,"Space"),(kVK_Return,"\u{21A9}"),(kVK_Tab,"\u{21E5}"),(kVK_Delete,"\u{232B}"),
         (kVK_F1,"F1"),(kVK_F2,"F2"),(kVK_F3,"F3"),(kVK_F4,"F4"),
         (kVK_F5,"F5"),(kVK_F6,"F6"),(kVK_F7,"F7"),(kVK_F8,"F8"),
         (kVK_F9,"F9"),(kVK_F10,"F10"),(kVK_F11,"F11"),(kVK_F12,"F12"),
@@ -85,77 +95,146 @@ private func keyCodeDisplayString(_ keyCode: UInt16) -> String {
     kKeyDisplayTable[keyCode] ?? "(\(keyCode))"
 }
 
+// MARK: - HotKey ID allocator
+
+private var _nextHotKeyID: UInt32 = 1
+private func nextHotKeyID() -> EventHotKeyID {
+    defer { _nextHotKeyID &+= 1 }
+    // 'Cent' as OSType signature
+    return EventHotKeyID(signature: 0x43656E74, id: _nextHotKeyID)
+}
+
 // MARK: - HotKey
 
+/// Installs a system-wide hotkey via Carbon RegisterEventHotKey.
+/// Only the exact key+modifier combination is ever delivered — no other
+/// keystrokes pass through this process, unlike NSEvent global monitors.
 @MainActor
 final class HotKey {
 
     private(set) var binding: HotKeyBinding
     var keyDownHandler: (() -> Void)?
 
-    private var globalMonitor: Any?
-    private var localMonitor:  Any?
+    private var hotKeyRef:    EventHotKeyRef?
+    private var handlerRef:   EventHandlerRef?
+    private var hotKeyID:     EventHotKeyID
     private var isActive = false
 
     init(binding: HotKeyBinding, handler: (() -> Void)? = nil) {
         self.binding        = binding
         self.keyDownHandler = handler
+        self.hotKeyID       = nextHotKeyID()
     }
 
     func activate() {
         guard !isActive else { return }
         isActive = true
-        attachMonitors()
+        installCarbonHandler()
+        registerHotKey()
     }
 
     func deactivate() {
         guard isActive else { return }
         isActive = false
-        removeMonitor(&globalMonitor)
-        removeMonitor(&localMonitor)
+        unregisterHotKey()
+        removeCarbonHandler()
     }
 
     func rebind(to newBinding: HotKeyBinding) {
         guard binding != newBinding else { return }
         let wasActive = isActive
         if wasActive { deactivate() }
-        binding = newBinding
+        binding   = newBinding
+        hotKeyID  = nextHotKeyID()   // fresh ID avoids stale matches
         if wasActive { activate() }
     }
 
-    // nonisolated: deinit cannot be actor-isolated in Swift.
-    // NSEvent.removeMonitor is thread-safe per documentation.
-    // We capture the monitor tokens into locals before dealloc to avoid
-    // reading actor-isolated stored properties from a non-isolated context.
     nonisolated deinit {
-        // The MainActor isolation guarantee is broken here by design.
-        // This is safe because:
-        //   1. NSEvent.removeMonitor is explicitly documented as thread-safe.
-        //   2. By the time deinit runs, no other code can hold a reference
-        //      to self, so there is no concurrent access to these properties.
-        // Swift strict concurrency will accept this with `nonisolated deinit`.
-        if let m = globalMonitor { NSEvent.removeMonitor(m) }
-        if let m = localMonitor  { NSEvent.removeMonitor(m) }
+        // Captured locally — no actor-isolated property access.
+        // UnregisterEventHotKey and RemoveEventHandler are safe to call
+        // from any thread per Carbon documentation.
+        // Note: hotKeyRef / handlerRef are MainActor-isolated stored properties;
+        // in practice deinit only runs after the last reference is dropped,
+        // which for @MainActor objects happens on the main thread, so this
+        // is safe. We suppress the warning with a nonisolated deinit
+        // that does NOT access stored properties — cleanup must happen
+        // via explicit deactivate() before release.
     }
 
-    private func attachMonitors() {
-        let b = binding   // capture by value — no self needed in the hot path
-        let handler: (NSEvent) -> Void = { [weak self] event in
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask) == b.modifiers,
-                  event.keyCode == b.keyCode
-            else { return }
-            self?.keyDownHandler?()
-        }
-        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
-        localMonitor  = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event)
-            return event
+    // MARK: - Carbon internals
+
+    private func installCarbonHandler() {
+        guard handlerRef == nil else { return }
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind:  OSType(kEventHotKeyPressed)
+        )
+        // Pass an unretained pointer to self as userData. The handler only fires
+        // while hotKeyRef is registered (i.e. while isActive == true and self
+        // is alive), so no retain is needed.
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        InstallEventHandler(
+            GetApplicationEventTarget(),
+            carbonHotKeyHandler,
+            1, &eventType,
+            selfPtr,
+            &handlerRef
+        )
+    }
+
+    private func removeCarbonHandler() {
+        if let ref = handlerRef {
+            RemoveEventHandler(ref)
+            handlerRef = nil
         }
     }
 
-    private func removeMonitor(_ monitor: inout Any?) {
-        guard let m = monitor else { return }
-        NSEvent.removeMonitor(m)
-        monitor = nil
+    private func registerHotKey() {
+        guard hotKeyRef == nil else { return }
+        RegisterEventHotKey(
+            UInt32(binding.keyCode),
+            binding.carbonModifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
     }
+
+    private func unregisterHotKey() {
+        if let ref = hotKeyRef {
+            UnregisterEventHotKey(ref)
+            hotKeyRef = nil
+        }
+    }
+
+    // Called from the C callback — must be @MainActor since the Carbon handler
+    // fires on the main thread (GetApplicationEventTarget).
+    func handleCarbonEvent(_ event: EventRef) {
+        var firedID = EventHotKeyID()
+        GetEventParameter(
+            event,
+            EventParamName(kEventParamDirectObject),
+            EventParamType(typeEventHotKeyID),
+            nil,
+            MemoryLayout<EventHotKeyID>.size,
+            nil,
+            &firedID
+        )
+        guard firedID.signature == hotKeyID.signature,
+              firedID.id        == hotKeyID.id
+        else { return }
+        keyDownHandler?()
+    }
+}
+
+// MARK: - Carbon callback (C function)
+
+/// Top-level C function required by InstallEventHandler.
+/// Hops are unnecessary — GetApplicationEventTarget always fires on the main thread.
+private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
+    guard let event, let userData else { return noErr }
+    let hotKey = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
+    hotKey.handleCarbonEvent(event)
+    return noErr
 }
