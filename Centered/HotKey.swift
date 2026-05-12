@@ -116,13 +116,11 @@ final class HotKey {
     }
 
     func rebind(to newBinding: HotKeyBinding) {
+        guard binding != newBinding else { return }
         let wasActive = isActive
-        if wasActive {
-            removeMonitor(&globalMonitor)
-            removeMonitor(&localMonitor)
-        }
+        if wasActive { deactivate() }
         binding = newBinding
-        if wasActive { attachMonitors() }
+        if wasActive { activate() }
     }
 
     // nonisolated: deinit cannot be actor-isolated in Swift.
@@ -150,7 +148,8 @@ final class HotKey {
         }
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
         localMonitor  = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event); return event
+            handler(event)
+            return event
         }
     }
 

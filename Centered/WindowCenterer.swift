@@ -43,7 +43,7 @@ private func axBool(_ element: AXUIElement, attribute: String) -> Bool? {
 private func axValue(_ element: AXUIElement, attribute: String) -> AXValue? {
     var raw: AnyObject?
     guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
-          let value = raw as AnyObject?,
+          let value = raw,
           CFGetTypeID(value) == AXValueGetTypeID(),
           let axVal = value as? AXValue
     else { return nil }
@@ -206,9 +206,10 @@ final class WindowCenterer {
 
     private func axWindows(_ el: AXUIElement) -> [AXUIElement]? {
         var raw: AnyObject?
-        guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &raw) == .success
+        guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &raw) == .success,
+              let list = raw as? [AnyObject]
         else { return nil }
-        return (raw as? [AnyObject])?.compactMap { axElement($0) } ?? []
+        return list.compactMap { axElement($0) }
     }
 
     // MARK: - AppleScript fallback
