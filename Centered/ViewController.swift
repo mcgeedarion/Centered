@@ -7,6 +7,7 @@
 
 import Cocoa
 
+@MainActor
 class ViewController: NSViewController {
 
     private var appDelegate: AppDelegate? {
@@ -47,9 +48,12 @@ class ViewController: NSViewController {
 
     // MARK: - UI update
 
-    // NotificationCenter may post from a background thread; always apply on main.
     @objc private func updateUI() {
-        DispatchQueue.main.async { [weak self] in self?.applyUI() }
+        if Thread.isMainThread {
+            applyUI()
+        } else {
+            DispatchQueue.main.async { [weak self] in self?.applyUI() }
+        }
     }
 
     private func applyUI() {

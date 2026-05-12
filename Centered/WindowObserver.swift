@@ -197,6 +197,5 @@ private let axObserverCallback: AXObserverCallback = { _, element, _, refcon in
     var pid: pid_t = 0
     AXUIElementGetPid(element, &pid)
     let observer = Unmanaged<WindowObserver>.fromOpaque(refcon).takeUnretainedValue()
-    let elem = element as AXUIElement
-    DispatchQueue.main.async { observer.handleWindowEvent(pid: pid, element: elem) }
+    DispatchQueue.main.async { observer.handleWindowEvent(pid: pid, element: element) }
 }

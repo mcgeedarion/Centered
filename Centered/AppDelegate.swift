@@ -35,20 +35,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private lazy var hotKey: HotKey = HotKey(binding: UserDefaults.standard.centerActiveBinding) {
         [weak self] in
-        DispatchQueue.main.async {
-            guard let self, self.isEnabled else { return }
-            self.centerer.centerFrontmost()
-            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
-        }
+        guard let self, self.isEnabled else { return }
+        self.centerer.centerFrontmost()
+        NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
     }
 
     private lazy var allWindowsHotKey: HotKey = HotKey(binding: UserDefaults.standard.centerAllBinding) {
         [weak self] in
-        DispatchQueue.main.async {
-            guard let self, self.isEnabled else { return }
-            self.centerer.centerAllWindows()
-            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
-        }
+        guard let self, self.isEnabled else { return }
+        self.centerer.centerAllWindows()
+        NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
     }
 
     // MARK: - State
@@ -56,7 +52,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private var preferencesWindowController: PreferencesWindowController?
     private var permissionTimer: Timer?
-    var isEnabled = false
+    private(set) var isEnabled = false
 
     // MARK: - Screen selection
 
@@ -142,7 +138,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func screensDidChange() {
         if let cur = centerer.selectedScreen, !NSScreen.screens.contains(cur) {
             logger.debug("Selected screen disconnected — resetting to main")
-            centerer.selectedScreen = NSScreen.main
+            centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
         }
         updateScreenMenu()
     }
