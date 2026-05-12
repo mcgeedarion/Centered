@@ -73,9 +73,10 @@ No third-party dependencies. No Swift Package Manager setup required.
 
 | File | Responsibility |
 |---|---|
-| `AppDelegate.swift` | App lifecycle, menu bar, hotkey wiring |
-| `WindowCenterer.swift` | AX centering logic, animation, AppleScript fallback |
-| `WindowObserver.swift` | AXObserver setup, exclusion list filtering |
-| `HotKey.swift` | NSEvent-based global/local key monitor, rebind support |
-| `PreferencesWindowController.swift` | Preferences UI (hotkeys + exclusion list) |
-| `UserDefaults+Centered.swift` | Typed UserDefaults accessors |
+| `AppDelegate.swift` | App lifecycle, status-bar menu (incrementally rebuilt per section — screens/actions/system), hotkey wiring, AX permission polling |
+| `WindowCenterer.swift` | AX centering logic, cubic ease-out animation, AppleScript fallback (dispatched off the main thread to avoid blocking AX callbacks) |
+| `WindowObserver.swift` | AXObserver setup, per-app exclusion filtering, explicit retain-counter lifecycle (`selfRetainCount`) |
+| `HotKey.swift` | NSEvent-based global/local key monitor, runtime rebind support |
+| `PreferencesWindowController.swift` | Preferences UI — hotkey recorder and exclusion list table view |
+| `ViewController.swift` | Menu-bar popover/window toggle switch and status indicator |
+| `UserDefaults+Centered.swift` | Typed UserDefaults accessors; all preference key strings centralized here |
