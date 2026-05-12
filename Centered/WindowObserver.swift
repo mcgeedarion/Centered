@@ -11,10 +11,13 @@
 // touching `self`.
 //
 // Retain balance:
-//   Each addObserver(for:) calls passRetained once and stores the observer.
-//   removeObserver(for:) releases once for that specific entry.
-//   stop() releases once per stored observer to balance exactly the number
-//   of passRetained calls that were made.
+//   addObserver(for:) calls passRetained once per registered app and increments
+//   `selfRetainCount`. removeObserver(for:) and stop() each call release exactly
+//   once per retained entry, keeping the count in sync.
+//
+//   Using an explicit counter (selfRetainCount) instead of inferring the count
+//   from observers.count makes the accounting immune to bugs introduced by
+//   future changes to addObserver / removeObserver.
 //
 // Retry:
 //   AXObserverCreate can fail transiently (e.g. kAXErrorAPIDisabled during
@@ -38,9 +41,13 @@ final class WindowObserver {
 
     // MARK: - Private state
 
-    private var observers   = [pid_t: AXObserver]()
-    private var bundleIDs   = [pid_t: String]()
-    private var isObserving = false
+    private var observers       = [pid_t: AXObserver]()
+    private var bundleIDs       = [pid_t: String]()
+    private var isObserving     = false
+    /// Tracks how many times passRetained(self) has been called without a
+    /// matching release. Every addObserver increments this; every
+    /// removeObserver decrements it. stop() drains the remainder.
+    private var selfRetainCount = 0
 
     /// Apps whose AXObserverCreate failed transiently; value = attempts so far.
     private var pendingRetry = [NSRunningApplication: Int]()
@@ -75,13 +82,13 @@ final class WindowObserver {
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        // Release once per stored observer to balance each passRetained.
-        let count = observers.count
         observers.values.forEach { removeRunLoopSource(for: $0) }
         observers.removeAll()
         bundleIDs.removeAll()
 
-        for _ in 0 ..< count {
+        // Drain all outstanding retains acquired by addObserver calls.
+        while selfRetainCount > 0 {
+            selfRetainCount -= 1
             Unmanaged.passUnretained(self).release()
         }
     }
@@ -118,9 +125,11 @@ final class WindowObserver {
             return
         }
 
+        // Retain self once per registered observer so the C callback can reach us.
         let selfPtr    = Unmanaged.passRetained(self).toOpaque()
-        let appElement = AXUIElementCreateApplication(pid)
+        selfRetainCount += 1
 
+        let appElement = AXUIElementCreateApplication(pid)
         for name in [kAXWindowCreatedNotification,
                      kAXWindowDeminiaturizedNotification,
                      kAXFocusedWindowChangedNotification] {
@@ -137,6 +146,7 @@ final class WindowObserver {
         guard let observer = observers.removeValue(forKey: pid) else { return }
         bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: observer)
+        selfRetainCount -= 1
         Unmanaged.passUnretained(self).release()
     }
 

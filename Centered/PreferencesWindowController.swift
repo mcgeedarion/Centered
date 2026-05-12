@@ -109,15 +109,15 @@ final class KeyRecorderField: NSTextField {
 @MainActor
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
-    private weak var appDelegate: AppDelegate?
-    private var activeKeyRecorder: KeyRecorderField!
-    private var allKeyRecorder:    KeyRecorderField!
-    private var tableView:         NSTableView!
-    private var removeButton:      NSButton!
-    private var excludedIDs:       [String] = []
-    private var openPanel:         NSOpenPanel?
+    private weak var appDelegate:   AppDelegate?
+    private var activeKeyRecorder:  KeyRecorderField!
+    private var allKeyRecorder:     KeyRecorderField!
+    private var tableView:          NSTableView!
+    private var removeButton:       NSButton!
+    private var excludedIDs:        [String] = []
+    private var openPanel:          NSOpenPanel?
 
-    // MARK: Init
+    // MARK: - Init
 
     init(appDelegate: AppDelegate) {
         self.appDelegate = appDelegate
@@ -135,7 +135,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
-    // MARK: NSWindowDelegate
+    // MARK: - NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
         let activeBinding = UserDefaults.standard.centerActiveBinding
@@ -149,17 +149,19 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        // Cancel before niling so any in-flight completion block gets .cancel.
         openPanel?.cancel(nil)
         openPanel = nil
-        // Release self from AppDelegate so the window and all subviews are deallocated.
+        // Notify AppDelegate to release its strong reference to this controller.
         appDelegate?.preferencesWindowDidClose()
     }
 
-    // MARK: UI
+    // MARK: - UI construction
 
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
+        // — Hotkeys section —
         let hotkeysHeader = sectionLabel("Hotkeys")
         let activeLabel   = fieldLabel("Center Active Window")
         let allLabel      = fieldLabel("Center All Windows")
@@ -181,12 +183,17 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
             self?.appDelegate?.rebindAllWindowsHotKey(to: b)
         }
 
-        let hotkeysHint      = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
+        let hotkeysHint = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
+
+        // — Exclusions section —
         let exclusionsHeader = sectionLabel("Auto-Center Exclusions")
         let exclusionsHint   = hintLabel("Apps listed here will never be auto-centered when focused.")
         excludedIDs          = UserDefaults.standard.excludedBundleIDs.sorted()
 
-        let scrollView = makeScrollView()
+        // buildTableView sets self.tableView as a side effect and returns the
+        // enclosing scroll view. Keeping setup and layout in separate methods
+        // makes each one easier to read and test independently.
+        let scrollView = buildTableView()
 
         let addButton = NSButton(title: "Add App…", target: self, action: #selector(addExclusion))
         addButton.bezelStyle = .rounded
@@ -195,17 +202,68 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         removeButton.bezelStyle = .rounded
         removeButton.isEnabled  = false
 
+        // — About section —
         let version    = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let aboutLabel = hintLabel("Centered v\(version) — personal use build")
 
-        for v in [hotkeysHeader, activeLabel, activeKeyRecorder,
-                  allLabel, allKeyRecorder, hotkeysHint,
-                  exclusionsHeader, exclusionsHint, scrollView,
-                  addButton, removeButton, aboutLabel] as [NSView] {
-            v.translatesAutoresizingMaskIntoConstraints = false
-            cv.addSubview(v)
+        let subviews: [NSView] = [
+            hotkeysHeader, activeLabel, activeKeyRecorder,
+            allLabel, allKeyRecorder, hotkeysHint,
+            exclusionsHeader, exclusionsHint, scrollView,
+            addButton, removeButton, aboutLabel,
+        ]
+        subviews.forEach {
+            $0.translatesAutoresizingMaskIntoConstraints = false
+            cv.addSubview($0)
         }
 
+        applyConstraints(
+            in: cv,
+            hotkeysHeader:    hotkeysHeader,
+            activeLabel:      activeLabel,
+            allLabel:         allLabel,
+            hotkeysHint:      hotkeysHint,
+            exclusionsHeader: exclusionsHeader,
+            exclusionsHint:   exclusionsHint,
+            scrollView:       scrollView,
+            addButton:        addButton,
+            aboutLabel:       aboutLabel
+        )
+    }
+
+    /// Creates and configures the table view, assigning `self.tableView`.
+    /// Returns the enclosing NSScrollView ready to be added to the hierarchy.
+    private func buildTableView() -> NSScrollView {
+        let tv = NSTableView()
+        tv.dataSource = self
+        tv.delegate   = self
+        tv.rowHeight  = 20
+        tv.headerView = nil
+        let col = NSTableColumn(identifier: .init("bundleID"))
+        col.title = "Bundle ID"
+        tv.addTableColumn(col)
+        tableView = tv
+
+        let sv = NSScrollView()
+        sv.hasVerticalScroller = true
+        sv.borderType          = .bezelBorder
+        sv.documentView        = tv
+        return sv
+    }
+
+    /// Activates all Auto Layout constraints for the preferences window.
+    private func applyConstraints(
+        in cv:             NSView,
+        hotkeysHeader:     NSView,
+        activeLabel:       NSView,
+        allLabel:          NSView,
+        hotkeysHint:       NSView,
+        exclusionsHeader:  NSView,
+        exclusionsHint:    NSView,
+        scrollView:        NSView,
+        addButton:         NSView,
+        aboutLabel:        NSView
+    ) {
         let m:  CGFloat = 20
         let lw: CGFloat = 180
 
@@ -258,23 +316,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         ])
     }
 
-    private func makeScrollView() -> NSScrollView {
-        let sv = NSScrollView()
-        sv.hasVerticalScroller = true
-        sv.borderType          = .bezelBorder
-        tableView            = NSTableView()
-        tableView.dataSource = self
-        tableView.delegate   = self
-        tableView.rowHeight  = 20
-        tableView.headerView = nil
-        let col = NSTableColumn(identifier: .init("bundleID"))
-        col.title = "Bundle ID"
-        tableView.addTableColumn(col)
-        sv.documentView = tableView
-        return sv
-    }
-
-    // MARK: Exclusion actions
+    // MARK: - Exclusion actions
 
     @objc private func addExclusion() {
         let panel = NSOpenPanel()
@@ -285,6 +327,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         openPanel = panel
         panel.begin { [weak self] response in
             guard let self else { return }
+            // Clear the reference first so windowWillClose won't cancel an
+            // already-completed panel.
             self.openPanel = nil
             guard response == .OK,
                   let url = panel.url,
@@ -314,7 +358,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         appDelegate?.setExcludedBundleIDs(Set(excludedIDs))
     }
 
-    // MARK: Label helpers
+    // MARK: - Label factory helpers
 
     private func sectionLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
