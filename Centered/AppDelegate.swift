@@ -79,7 +79,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             } catch {
                 logger.debug("SMAppService error: \(error.localizedDescription, privacy: .public)")
             }
-            updateScreenMenu()
+            rebuildActionsSection()
         }
     }
 
@@ -105,13 +105,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func rebindHotKey(to binding: HotKeyBinding) {
         UserDefaults.standard.centerActiveBinding = binding
         hotKey.rebind(to: binding)
-        updateScreenMenu()
+        rebuildActionsSection()
     }
 
     func rebindAllWindowsHotKey(to binding: HotKeyBinding) {
         UserDefaults.standard.centerAllBinding = binding
         allWindowsHotKey.rebind(to: binding)
-        updateScreenMenu()
+        rebuildActionsSection()
     }
 
     // MARK: - Exclusion list
@@ -140,7 +140,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             logger.debug("Selected screen disconnected — resetting to main")
             centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
         }
-        updateScreenMenu()
+        rebuildScreenSection()
     }
 
     // MARK: - Permissions
@@ -156,7 +156,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Enable / Disable
 
-    @objc func enableApp() {
+    func enableApp() {
         guard !isEnabled else { return }
         guard AXIsProcessTrusted() else { showPermissionAlert(); return }
         isEnabled = true
@@ -169,7 +169,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         startPermissionChecks()
     }
 
-    @objc func disableApp() {
+    func disableApp() {
         guard isEnabled else { return }
         isEnabled = false
         observer.stop()
@@ -194,6 +194,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Status bar menu
 
+    // The menu is divided into three tagged sections so only the affected
+    // section needs to be rebuilt when state changes:
+    //   tag 1xx — screen items
+    //   tag 2xx — action items (center, preferences, launch-at-login)
+    //   tag 3xx — quit
+    // Separators between sections are fixed and never replaced.
+
+    private enum MenuSection: Int {
+        case screens = 100, actions = 200, system = 300
+    }
+
     private func setupStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem?.button?.image = NSImage(
@@ -201,59 +212,130 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             accessibilityDescription: "Centered"
         )
         statusItem?.button?.contentTintColor = .labelColor
-        updateScreenMenu()
+        buildFullMenu()
     }
 
-    private func updateScreenMenu() {
-        let menu    = NSMenu()
-        let screens = NSScreen.screens
-        guard !screens.isEmpty else { statusItem?.menu = menu; return }
+    /// Builds the complete menu from scratch (called once at startup).
+    private func buildFullMenu() {
+        let menu = NSMenu()
+        appendScreenItems(to: menu)
+        menu.addItem(.separator())
+        appendActionItems(to: menu)
+        menu.addItem(.separator())
+        appendSystemItems(to: menu)
+        statusItem?.menu = menu
+    }
 
-        for (i, screen) in screens.enumerated() {
+    /// Replaces only the screen items (tags 100…) in the existing menu.
+    private func rebuildScreenSection() {
+        guard let menu = statusItem?.menu else { buildFullMenu(); return }
+        removeItems(taggedIn: MenuSection.screens.rawValue ..< MenuSection.actions.rawValue, from: menu)
+        let sep = menu.items.first(where: { $0.isSeparatorItem })
+        let insertIdx = sep.map { menu.index(of: $0) } ?? 0
+        let newItems = makeScreenItems()
+        for (offset, item) in newItems.enumerated() {
+            menu.insertItem(item, at: insertIdx + offset)
+        }
+    }
+
+    /// Replaces only the action items (tags 200…) in the existing menu.
+    private func rebuildActionsSection() {
+        guard let menu = statusItem?.menu else { buildFullMenu(); return }
+        removeItems(taggedIn: MenuSection.actions.rawValue ..< MenuSection.system.rawValue, from: menu)
+        // Find the separator that follows the screen section.
+        let seps = menu.items.filter { $0.isSeparatorItem }
+        let insertIdx: Int
+        if let firstSep = seps.first {
+            insertIdx = menu.index(of: firstSep) + 1
+        } else {
+            insertIdx = menu.numberOfItems
+        }
+        let newItems = makeActionItems()
+        for (offset, item) in newItems.enumerated() {
+            menu.insertItem(item, at: insertIdx + offset)
+        }
+    }
+
+    // MARK: Menu item factories
+
+    private func makeScreenItems() -> [NSMenuItem] {
+        let screens = NSScreen.screens
+        return screens.enumerated().map { i, screen in
             let item = NSMenuItem(
                 title:         "Screen \(i + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))",
                 action:        #selector(selectScreen(_:)),
                 keyEquivalent: ""
             )
-            item.tag    = i
+            item.tag    = MenuSection.screens.rawValue + i
             item.state  = (selectedScreen == screen) ? .on : .off
             item.target = self
-            menu.addItem(item)
+            return item
         }
+    }
 
-        menu.addItem(.separator())
+    private func makeActionItems() -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
 
-        menu.addItem(makeItem(
+        let centerActive = makeItem(
             title:  "Center Active Window  " + UserDefaults.standard.centerActiveBinding.displayString,
             action: #selector(centerActiveWindowManually)
-        ))
-        menu.addItem(makeItem(
+        )
+        centerActive.tag = MenuSection.actions.rawValue + 1
+        items.append(centerActive)
+
+        let centerAll = makeItem(
             title:  "Center All Windows  " + UserDefaults.standard.centerAllBinding.displayString,
             action: #selector(centerAllWindowsManually)
-        ))
+        )
+        centerAll.tag = MenuSection.actions.rawValue + 2
+        items.append(centerAll)
 
-        menu.addItem(.separator())
-        menu.addItem(makeItem(title: "Preferences…", action: #selector(openPreferences), key: ","))
+        items.append(.separator())
+
+        let prefs = makeItem(title: "Preferences…", action: #selector(openPreferences), key: ",")
+        prefs.tag = MenuSection.actions.rawValue + 3
+        items.append(prefs)
 
         if #available(macOS 13, *) {
-            let item   = makeItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin))
-            item.state = launchAtLogin ? .on : .off
-            menu.addItem(item)
+            let lal = makeItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin))
+            lal.state = launchAtLogin ? .on : .off
+            lal.tag   = MenuSection.actions.rawValue + 4
+            items.append(lal)
         }
 
-        menu.addItem(.separator())
-        menu.addItem(withTitle: "Quit Centered",
-                     action: #selector(NSApplication.terminate(_:)),
-                     keyEquivalent: "q")
+        return items
+    }
 
-        statusItem?.menu = menu
+    private func appendScreenItems(to menu: NSMenu) {
+        makeScreenItems().forEach { menu.addItem($0) }
+    }
+
+    private func appendActionItems(to menu: NSMenu) {
+        makeActionItems().forEach { menu.addItem($0) }
+    }
+
+    private func appendSystemItems(to menu: NSMenu) {
+        let quit = NSMenuItem(
+            title: "Quit Centered",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: "q"
+        )
+        quit.tag = MenuSection.system.rawValue
+        menu.addItem(quit)
+    }
+
+    private func removeItems(taggedIn range: Range<Int>, from menu: NSMenu) {
+        menu.items
+            .filter { range.contains($0.tag) }
+            .forEach { menu.removeItem($0) }
     }
 
     @objc private func selectScreen(_ sender: NSMenuItem) {
         let screens = NSScreen.screens
-        guard sender.tag < screens.count else { return }
-        selectedScreen = screens[sender.tag]
-        updateScreenMenu()
+        let idx = sender.tag - MenuSection.screens.rawValue
+        guard idx >= 0, idx < screens.count else { return }
+        selectedScreen = screens[idx]
+        rebuildScreenSection()
     }
 
     @objc private func toggleLaunchAtLogin() { launchAtLogin.toggle() }
