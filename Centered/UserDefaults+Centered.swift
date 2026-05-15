@@ -78,6 +78,7 @@ private enum ExclusionHMAC {
 
     private static let service = Bundle.main.bundleIdentifier ?? "Centered"
     private static let account = "excludedBundleIDsHMAC"
+    private static let keyAccount = "excludedBundleIDsKey"
 
     /// Deterministic serialisation: sorted, newline-joined UTF-8.
     private static func serialise(_ ids: Set<String>) -> Data {
@@ -91,25 +92,38 @@ private enum ExclusionHMAC {
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
             kSecAttrService: service,
-            kSecAttrAccount: "excludedBundleIDsKey",
+            kSecAttrAccount: keyAccount,
             kSecReturnData:  true,
             kSecMatchLimit:  kSecMatchLimitOne,
         ]
         var result: AnyObject?
-        if SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        if status == errSecSuccess,
            let keyData = result as? Data, keyData.count == 32 {
             return SymmetricKey(data: keyData)
         }
+
         let newKey  = SymmetricKey(size: .bits256)
         let keyData = newKey.withUnsafeBytes { Data($0) }
-        let add: [CFString: Any] = [
+        let attrs: [CFString: Any] = [
             kSecClass:          kSecClassGenericPassword,
             kSecAttrService:    service,
-            kSecAttrAccount:    "excludedBundleIDsKey",
+            kSecAttrAccount:    keyAccount,
             kSecValueData:      keyData,
             kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemAdd(add as CFDictionary, nil)
+
+        if status == errSecSuccess {
+            let lookup: [CFString: Any] = [
+                kSecClass:       kSecClassGenericPassword,
+                kSecAttrService: service,
+                kSecAttrAccount: keyAccount,
+            ]
+            let update: [CFString: Any] = [kSecValueData: keyData]
+            SecItemUpdate(lookup as CFDictionary, update as CFDictionary)
+        } else {
+            SecItemAdd(attrs as CFDictionary, nil)
+        }
         return newKey
     }
 

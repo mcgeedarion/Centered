@@ -85,7 +85,10 @@ final class WindowObserver {
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        boxes.values.forEach { removeRunLoopSource(for: $0.axObserver) }
+        boxes.values.forEach { box in
+            removeRunLoopSource(for: box.axObserver)
+            releaseRetainedRefcon(for: box)
+        }
         boxes.removeAll()
         bundleIDs.removeAll()
     }
@@ -141,6 +144,10 @@ final class WindowObserver {
         guard let box = boxes.removeValue(forKey: pid) else { return }
         bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: box.axObserver)
+        releaseRetainedRefcon(for: box)
+    }
+
+    private func releaseRetainedRefcon(for box: ObserverBox) {
         // Balance the passRetained from addObserver.
         _ = Unmanaged<ObserverBox>.passUnretained(box).takeRetainedValue()
     }
