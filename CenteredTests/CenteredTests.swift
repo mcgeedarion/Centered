@@ -115,10 +115,10 @@ struct AnimationPositionTests {
         #expect(abs(pos.y - end.y) < 1e-10)
     }
 
-    @Test func midpointStep() {
+    @Test func midpointStepUsesCubicEaseOut() {
         let pos = WindowCenterer.animationPosition(from: start, to: end, step: 5, totalSteps: 10)
-        #expect(pos.x == 50)
-        #expect(pos.y == 100)
+        #expect(abs(pos.x - 87.5) < 1e-10)
+        #expect(abs(pos.y - 175) < 1e-10)
     }
 
     @Test func stepsAreMonotonicallyIncreasing() {
@@ -164,108 +164,81 @@ struct AnimationPositionTests {
         }
     }
 
-    /// Steps should be evenly spaced: each delta == (end - start) / totalSteps.
-    @Test func evenlySpaced() {
-        let expectedDX = (end.x - start.x) / 10
-        let expectedDY = (end.y - start.y) / 10
+    @Test func easeOutDeltasDecrease() {
+        var previousDX = CGFloat.greatestFiniteMagnitude
+        var previousDY = CGFloat.greatestFiniteMagnitude
+
         for i in 1...10 {
             let prev = WindowCenterer.animationPosition(from: start, to: end, step: i - 1, totalSteps: 10)
             let curr = WindowCenterer.animationPosition(from: start, to: end, step: i,     totalSteps: 10)
-            #expect(abs((curr.x - prev.x) - expectedDX) < 1e-10)
-            #expect(abs((curr.y - prev.y) - expectedDY) < 1e-10)
+            let dx = curr.x - prev.x
+            let dy = curr.y - prev.y
+
+            #expect(dx > 0)
+            #expect(dy > 0)
+            #expect(dx <= previousDX)
+            #expect(dy <= previousDY)
+
+            previousDX = dx
+            previousDY = dy
         }
+    }
+
+    @Test func negativeStepClampsToStart() {
+        let pos = WindowCenterer.animationPosition(from: start, to: end, step: -1, totalSteps: 10)
+        #expect(pos == start)
+    }
+
+    @Test func stepAfterEndClampsToEnd() {
+        let pos = WindowCenterer.animationPosition(from: start, to: end, step: 11, totalSteps: 10)
+        #expect(abs(pos.x - end.x) < 1e-10)
+        #expect(abs(pos.y - end.y) < 1e-10)
+    }
+
+    @Test func zeroTotalStepsReturnsEnd() {
+        let pos = WindowCenterer.animationPosition(from: start, to: end, step: 0, totalSteps: 0)
+        #expect(pos == end)
     }
 }
 
-// MARK: - App name sanitization
+// MARK: - AppleScript bundle ID validation
 
-@Suite("App name sanitization")
-struct AppNameSanitizationTests {
+@Suite("AppleScript bundle ID validation")
+struct AppleScriptBundleIDValidationTests {
 
-    let centerer = WindowCenterer()
-
-    // --- Names that should PASS ---
-
-    @Test func normalAppName() {
-        #expect(centerer.sanitizedAppName("Safari") == "Safari")
+    @Test func normalBundleIDPasses() {
+        #expect(WindowCenterer.isValidAppleScriptBundleID("com.apple.Safari"))
     }
 
-    @Test func appNameWithSpaces() {
-        #expect(centerer.sanitizedAppName("Final Cut Pro") == "Final Cut Pro")
+    @Test func bundleIDWithDashPasses() {
+        #expect(WindowCenterer.isValidAppleScriptBundleID("com.example.my-app"))
     }
 
-    @Test func appNameWithDotAndDash() {
-        #expect(centerer.sanitizedAppName("my-app.v2") == "my-app.v2")
+    @Test func bundleIDWithUnderscoreFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID("com.example.my_app"))
     }
 
-    @Test func appNameWithUnderscoreAndNumbers() {
-        #expect(centerer.sanitizedAppName("app_2024") == "app_2024")
+    @Test func emptyBundleIDFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID(""))
     }
 
-    @Test func appNameWithMixedCase() {
-        #expect(centerer.sanitizedAppName("IntelliJ IDEA") == "IntelliJ IDEA")
+    @Test func overlongBundleIDFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID(String(repeating: "a", count: 256)))
     }
 
-    // --- Whitespace control chars stripped before allowlist check ---
-
-    @Test func newlineIsStripped() {
-        // "Safari\n" strips to "Safari" which is then allowed.
-        #expect(centerer.sanitizedAppName("Safari\n") == "Safari")
+    @Test func quoteInjectionFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID("com.example.\"bad"))
     }
 
-    @Test func tabIsStripped() {
-        #expect(centerer.sanitizedAppName("Safari\t") == "Safari")
+    @Test func backslashInjectionFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID("com.example.\\bad"))
     }
 
-    @Test func nullByteIsStripped() {
-        #expect(centerer.sanitizedAppName("Safari\0") == "Safari")
+    @Test func whitespaceFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID("com.example.bad\n"))
     }
 
-    @Test func carriageReturnIsStripped() {
-        #expect(centerer.sanitizedAppName("Safari\r") == "Safari")
-    }
-
-    // --- Names that should FAIL (return nil) ---
-
-    @Test func scriptInjectionWithQuote() {
-        // A quote character would break out of the AppleScript string.
-        #expect(centerer.sanitizedAppName("bad\"app") == nil)
-    }
-
-    @Test func scriptInjectionWithBackslash() {
-        #expect(centerer.sanitizedAppName("bad\\app") == nil)
-    }
-
-    @Test func emojiIsRejected() {
-        #expect(centerer.sanitizedAppName("App 🚀") == nil)
-    }
-
-    @Test func semicolonIsRejected() {
-        #expect(centerer.sanitizedAppName("app;rm -rf /") == nil)
-    }
-
-    @Test func parenthesesAreRejected() {
-        #expect(centerer.sanitizedAppName("app()") == nil)
-    }
-
-    @Test func unicodeLettersAreRejected() {
-        // Non-ASCII letters (e.g. accented chars) are not in CharacterSet.alphanumerics
-        // on all platforms — verify the behaviour is consistent.
-        let result = centerer.sanitizedAppName("Ché")
-        // alphanumerics includes Unicode letters in Swift, so accented chars pass.
-        // This test documents the current behaviour rather than asserting pass/fail.
-        if result != nil {
-            #expect(result == "Ché")
-        }
-    }
-
-    @Test func emptyStringIsAllowed() {
-        // An empty name strips to "", which passes the allSatisfy vacuously.
-        #expect(centerer.sanitizedAppName("") == "")
-    }
-
-    @Test func onlyControlCharsBecomesEmptyAndPasses() {
-        // "\n\r\t" strips to "", which vacuously passes the allowlist.
-        #expect(centerer.sanitizedAppName("\n\r\t") == "")
+    @Test func unicodeLetterFails() {
+        #expect(!WindowCenterer.isValidAppleScriptBundleID("com.example.Ché"))
     }
 }

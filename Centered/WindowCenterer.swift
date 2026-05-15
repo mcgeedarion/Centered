@@ -33,8 +33,9 @@ private let kAnimationInterval: Double = 0.012
 
 // MARK: - Bundle-ID validation
 
-private let kBundleIDAllowedChars: CharacterSet =
-    .alphanumerics.union(CharacterSet(charactersIn: ".-"))
+private let kBundleIDAllowedChars = CharacterSet(
+    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-"
+)
 private let kBundleIDMaxLength: Int = 255
 
 private let appleScriptQueue = DispatchQueue(label: "com.centered.applescript", qos: .userInitiated)
@@ -139,17 +140,25 @@ final class WindowCenterer {
 
     // MARK: - Geometry
 
-    static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
+    nonisolated static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
         CGPoint(x: screenRect.midX - windowSize.width  / 2,
                 y: screenRect.midY - windowSize.height / 2)
     }
 
     /// Cubic ease-out: f(t) = 1-(1-t)³.
-    static func animationPosition(from start: CGPoint, to end: CGPoint,
-                                  step i: Int, totalSteps: Int) -> CGPoint {
-        let t = 1.0 - pow(1.0 - CGFloat(i) / CGFloat(totalSteps), 3.0)
+    nonisolated static func animationPosition(from start: CGPoint, to end: CGPoint,
+                                              step i: Int, totalSteps: Int) -> CGPoint {
+        guard totalSteps > 0 else { return end }
+        let clampedStep = min(max(i, 0), totalSteps)
+        let t = 1.0 - pow(1.0 - CGFloat(clampedStep) / CGFloat(totalSteps), 3.0)
         return CGPoint(x: start.x + (end.x - start.x) * t,
                        y: start.y + (end.y - start.y) * t)
+    }
+
+    nonisolated static func isValidAppleScriptBundleID(_ bundleID: String) -> Bool {
+        !bundleID.isEmpty &&
+        bundleID.count <= kBundleIDMaxLength &&
+        bundleID.unicodeScalars.allSatisfy { kBundleIDAllowedChars.contains($0) }
     }
 
     // MARK: - AX centering
@@ -228,12 +237,8 @@ final class WindowCenterer {
     }
 
     private func executeAppleScriptCentering(bundleID: String, app: NSRunningApplication) {
-        guard bundleID.unicodeScalars.allSatisfy({ kBundleIDAllowedChars.contains($0) }) else {
-            logger.debug("Rejected bundle ID with disallowed characters")
-            return
-        }
-        guard bundleID.count <= kBundleIDMaxLength, !bundleID.isEmpty else {
-            logger.debug("Rejected bundle ID with invalid length")
+        guard WindowCenterer.isValidAppleScriptBundleID(bundleID) else {
+            logger.debug("Rejected bundle ID with invalid format")
             return
         }
         guard NSRunningApplication
