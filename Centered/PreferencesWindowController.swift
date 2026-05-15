@@ -67,12 +67,7 @@ final class KeyRecorderField: NSTextField {
 
     override func flagsChanged(with event: NSEvent) {
         guard isRecording else { return }
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        var preview = ""
-        if mods.contains(.control) { preview += "⌃" }
-        if mods.contains(.option)  { preview += "⌥" }
-        if mods.contains(.shift)   { preview += "⇧" }
-        if mods.contains(.command) { preview += "⌘" }
+        let preview = event.modifierFlags.hotKeyDisplayString
         stringValue = preview.isEmpty ? "Press shortcut…" : preview + "_"
     }
 
