@@ -22,14 +22,16 @@ import Cocoa
 import ApplicationServices
 import os.log
 
-private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered",
-                            category: "WindowCenterer")
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Centered",
+    category: "WindowCenterer"
+)
 
 // MARK: - Animation constants
 
 /// 16 steps × 12 ms ≈ 192 ms total, ~83 fps.
-private let kAnimationSteps:    Int    = 16
-private let kAnimationInterval: Double = 0.012
+private let kAnimationSteps = 16
+private let kAnimationInterval: TimeInterval = 0.012
 
 // MARK: - Bundle-ID validation
 
@@ -141,18 +143,26 @@ final class WindowCenterer {
     // MARK: - Geometry
 
     nonisolated static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
-        CGPoint(x: screenRect.midX - windowSize.width  / 2,
-                y: screenRect.midY - windowSize.height / 2)
+        CGPoint(
+            x: screenRect.midX - windowSize.width / 2,
+            y: screenRect.midY - windowSize.height / 2
+        )
     }
 
     /// Cubic ease-out: f(t) = 1-(1-t)³.
-    nonisolated static func animationPosition(from start: CGPoint, to end: CGPoint,
-                                              step i: Int, totalSteps: Int) -> CGPoint {
+    nonisolated static func animationPosition(
+        from start: CGPoint,
+        to end: CGPoint,
+        step i: Int,
+        totalSteps: Int
+    ) -> CGPoint {
         guard totalSteps > 0 else { return end }
         let clampedStep = min(max(i, 0), totalSteps)
         let t = 1.0 - pow(1.0 - CGFloat(clampedStep) / CGFloat(totalSteps), 3.0)
-        return CGPoint(x: start.x + (end.x - start.x) * t,
-                       y: start.y + (end.y - start.y) * t)
+        return CGPoint(
+            x: start.x + (end.x - start.x) * t,
+            y: start.y + (end.y - start.y) * t
+        )
     }
 
     nonisolated static func isValidAppleScriptBundleID(_ bundleID: String) -> Bool {
@@ -182,9 +192,7 @@ final class WindowCenterer {
     private func animateWindowPosition(_ window: AXUIElement, to target: CGPoint) {
         guard let posVal = axValue(window, attribute: kAXPositionAttribute) else { return }
         var start = CGPoint()
-        AXValueGetValue(posVal, .cgPoint, &start)
-
-        guard start != target else { return }
+        guard AXValueGetValue(posVal, .cgPoint, &start), start != target else { return }
 
         isCentering = true
         let token   = DispatchWorkItem {}

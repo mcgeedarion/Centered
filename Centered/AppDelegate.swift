@@ -12,14 +12,16 @@ import ApplicationServices
 import ServiceManagement
 import os.log
 
-private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "Centered",
-                            category: "AppDelegate")
+private let logger = Logger(
+    subsystem: Bundle.main.bundleIdentifier ?? "Centered",
+    category: "AppDelegate"
+)
 
 // MARK: - Notification names
 
 extension Notification.Name {
     static let appStateChanged = Notification.Name("appStateChanged")
-    static let hotkeyPressed   = Notification.Name("hotkeyPressed")
+    static let hotkeyPressed = Notification.Name("hotkeyPressed")
 }
 
 // MARK: -
@@ -74,8 +76,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         set {
             guard #available(macOS 13, *) else { return }
             do {
-                try newValue ? SMAppService.mainApp.register()
-                             : SMAppService.mainApp.unregister()
+                if newValue {
+                    try SMAppService.mainApp.register()
+                } else {
+                    try SMAppService.mainApp.unregister()
+                }
             } catch {
                 logger.debug("SMAppService error: \(error.localizedDescription, privacy: .public)")
             }
@@ -152,8 +157,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         )
-        _ = NSAppleScript(source: "tell application \"System Events\" to get its name")
-              ?.executeAndReturnError(nil)
+        _ = NSAppleScript(source: "tell application \"System Events\" to get its name")?.executeAndReturnError(nil)
     }
 
     // MARK: - Enable / Disable
@@ -225,21 +229,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func rebuildScreenSection() {
         guard let menu = statusItem?.menu else { buildFullMenu(); return }
         removeItems(taggedIn: MenuSection.screens.rawValue ..< MenuSection.actions.rawValue, from: menu)
-        let sep = menu.items.first(where: { $0.isSeparatorItem })
-        let insertIdx = sep.map { menu.index(of: $0) } ?? 0
-        for (offset, item) in makeScreenItems().enumerated() {
-            menu.insertItem(item, at: insertIdx + offset)
-        }
+        let separator = menu.items.first(where: { $0.isSeparatorItem })
+        let insertIndex = separator.map { menu.index(of: $0) } ?? 0
+        insert(makeScreenItems(), into: menu, at: insertIndex)
     }
 
     private func rebuildActionsSection() {
         guard let menu = statusItem?.menu else { buildFullMenu(); return }
         removeItems(taggedIn: MenuSection.actions.rawValue ..< MenuSection.system.rawValue, from: menu)
-        let seps = menu.items.filter { $0.isSeparatorItem }
-        let insertIdx = seps.first.map { menu.index(of: $0) + 1 } ?? menu.numberOfItems
-        for (offset, item) in makeActionItems().enumerated() {
-            menu.insertItem(item, at: insertIdx + offset)
-        }
+        let separator = menu.items.first(where: { $0.isSeparatorItem })
+        let insertIndex = separator.map { menu.index(of: $0) + 1 } ?? menu.numberOfItems
+        insert(makeActionItems(), into: menu, at: insertIndex)
     }
 
     private func makeScreenItems() -> [NSMenuItem] {
@@ -290,8 +290,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return items
     }
 
-    private func appendScreenItems(to menu: NSMenu)  { makeScreenItems().forEach  { menu.addItem($0) } }
-    private func appendActionItems(to menu: NSMenu)  { makeActionItems().forEach  { menu.addItem($0) } }
+    private func appendScreenItems(to menu: NSMenu) {
+        makeScreenItems().forEach { menu.addItem($0) }
+    }
+
+    private func appendActionItems(to menu: NSMenu) {
+        makeActionItems().forEach { menu.addItem($0) }
+    }
+
+    private func insert(_ items: [NSMenuItem], into menu: NSMenu, at index: Int) {
+        for (offset, item) in items.enumerated() {
+            menu.insertItem(item, at: index + offset)
+        }
+    }
 
     private func appendSystemItems(to menu: NSMenu) {
         let quit = NSMenuItem(
