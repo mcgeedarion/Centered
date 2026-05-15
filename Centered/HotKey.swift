@@ -12,6 +12,8 @@
 import Cocoa
 import Carbon.HIToolbox
 
+private let kSupportedHotKeyModifiers: NSEvent.ModifierFlags = [.command, .option, .shift, .control]
+
 // MARK: - HotKeyBinding
 
 struct HotKeyBinding: Equatable {
@@ -28,19 +30,20 @@ struct HotKeyBinding: Equatable {
 
     init(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
         self.keyCode   = keyCode
-        self.modifiers = modifiers
+        self.modifiers = modifiers.intersection(kSupportedHotKeyModifiers)
     }
 
     init?(dictionary: [String: Any]) {
-        guard let kc = dictionary["keyCode"]   as? Int,
+        guard let kc = dictionary["keyCode"] as? Int,
+              let keyCode = UInt16(exactly: kc),
               let mf = dictionary["modifiers"] as? UInt
         else { return nil }
-        keyCode   = UInt16(kc)
-        modifiers = NSEvent.ModifierFlags(rawValue: mf)
+        self.keyCode = keyCode
+        modifiers = NSEvent.ModifierFlags(rawValue: mf).intersection(kSupportedHotKeyModifiers)
     }
 
     var displayString: String {
-        let m = modifiers.intersection(.deviceIndependentFlagsMask)
+        let m = modifiers.intersection(kSupportedHotKeyModifiers)
         var s = ""
         if m.contains(.control) { s += "\u{2303}" }
         if m.contains(.option)  { s += "\u{2325}" }
@@ -53,7 +56,7 @@ struct HotKeyBinding: Equatable {
     /// NSEvent modifier flags converted to the Carbon mask for RegisterEventHotKey.
     var carbonModifiers: UInt32 {
         var mask: UInt32 = 0
-        let m = modifiers.intersection(.deviceIndependentFlagsMask)
+        let m = modifiers.intersection(kSupportedHotKeyModifiers)
         if m.contains(.command) { mask |= UInt32(cmdKey) }
         if m.contains(.option)  { mask |= UInt32(optionKey) }
         if m.contains(.shift)   { mask |= UInt32(shiftKey) }

@@ -6,6 +6,7 @@
 //
 
 import Testing
+import Cocoa
 import CoreGraphics
 @testable import Centered
 
@@ -240,5 +241,32 @@ struct AppleScriptBundleIDValidationTests {
 
     @Test func unicodeLetterFails() {
         #expect(!WindowCenterer.isValidAppleScriptBundleID("com.example.Ché"))
+    }
+}
+
+
+// MARK: - HotKeyBinding preference decoding
+
+@Suite("HotKeyBinding preference decoding")
+struct HotKeyBindingPreferenceDecodingTests {
+
+    @Test func validDictionaryDecodes() {
+        let decoded = HotKeyBinding(dictionary: ["keyCode": 8, "modifiers": NSEvent.ModifierFlags.command.rawValue])
+        #expect(decoded?.keyCode == 8)
+        #expect(decoded?.modifiers == .command)
+    }
+
+    @Test func negativeKeyCodeIsRejected() {
+        #expect(HotKeyBinding(dictionary: ["keyCode": -1, "modifiers": UInt(0)]) == nil)
+    }
+
+    @Test func oversizedKeyCodeIsRejected() {
+        #expect(HotKeyBinding(dictionary: ["keyCode": Int(UInt16.max) + 1, "modifiers": UInt(0)]) == nil)
+    }
+
+    @Test func persistedModifiersAreLimitedToSupportedShortcutFlags() {
+        let raw = NSEvent.ModifierFlags.command.rawValue | NSEvent.ModifierFlags.numericPad.rawValue
+        let decoded = HotKeyBinding(dictionary: ["keyCode": 8, "modifiers": raw])
+        #expect(decoded?.modifiers == .command)
     }
 }
