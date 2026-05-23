@@ -10,14 +10,24 @@
 //   3. About      — bundle version string
 //
 // Window lifecycle:
-//   windowDidBecomeKey  — reloads all fields from UserDefaults
-//   windowWillClose     — cancels any open NSOpenPanel; notifies AppDelegate
+//   windowDidBecomeKey  — reloads all fields from Settings
+//   windowWillClose     — cancels any open NSOpenPanel; notifies host
 //                         to nil its preferencesWindowController reference
 //                         so the window and all subviews are released.
 //
 
 import Cocoa
 import Carbon.HIToolbox
+
+// MARK: - PreferencesHost
+
+protocol PreferencesHost: AnyObject {
+    var settings: Settings { get }
+    func rebindHotKey(to binding: HotKeyBinding)
+    func rebindAllWindowsHotKey(to binding: HotKeyBinding)
+    func setExcludedBundleIDs(_ ids: Set<String>)
+    func preferencesWindowDidClose()
+}
 
 // MARK: - KeyRecorderField
 
@@ -104,7 +114,7 @@ final class KeyRecorderField: NSTextField {
 @MainActor
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
-    private weak var appDelegate:   AppDelegate?
+    private weak var host: PreferencesHost?
     private var activeKeyRecorder:  KeyRecorderField!
     private var allKeyRecorder:     KeyRecorderField!
     private var tableView:          NSTableView!
@@ -114,8 +124,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Init
 
-    init(appDelegate: AppDelegate) {
-        self.appDelegate = appDelegate
+    init(host: PreferencesHost) {
+        self.host = host
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 440),
             styleMask:   [.titled, .closable],
@@ -133,22 +143,21 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
-        let activeBinding = UserDefaults.standard.centerActiveBinding
-        let allBinding    = UserDefaults.standard.centerAllBinding
+        guard let settings = host?.settings else { return }
+        let activeBinding = settings.centerActiveBinding
+        let allBinding    = settings.centerAllBinding
         activeKeyRecorder.binding         = activeBinding
         allKeyRecorder.binding            = allBinding
         activeKeyRecorder.conflictBinding = allBinding
         allKeyRecorder.conflictBinding    = activeBinding
-        excludedIDs = UserDefaults.standard.excludedBundleIDs.sorted()
+        excludedIDs = Array(settings.excludedBundleIDs).sorted()
         tableView.reloadData()
     }
 
     func windowWillClose(_ notification: Notification) {
-        // Cancel before niling so any in-flight completion block gets .cancel.
         openPanel?.cancel(nil)
         openPanel = nil
-        // Notify AppDelegate to release its strong reference to this controller.
-        appDelegate?.preferencesWindowDidClose()
+        host?.preferencesWindowDidClose()
     }
 
     // MARK: - UI construction
@@ -161,21 +170,21 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let activeLabel   = fieldLabel("Center Active Window")
         let allLabel      = fieldLabel("Center All Windows")
 
-        let activeBinding = UserDefaults.standard.centerActiveBinding
-        let allBinding    = UserDefaults.standard.centerAllBinding
+        let activeBinding = host?.settings.centerActiveBinding ?? .centerActive
+        let allBinding    = host?.settings.centerAllBinding ?? .centerAll
 
         activeKeyRecorder = KeyRecorderField(binding: activeBinding)
         activeKeyRecorder.conflictBinding = allBinding
         activeKeyRecorder.onBindingChanged = { [weak self] b in
             self?.allKeyRecorder.conflictBinding = b
-            self?.appDelegate?.rebindHotKey(to: b)
+            self?.host?.rebindHotKey(to: b)
         }
 
         allKeyRecorder = KeyRecorderField(binding: allBinding)
         allKeyRecorder.conflictBinding = activeBinding
         allKeyRecorder.onBindingChanged = { [weak self] b in
             self?.activeKeyRecorder.conflictBinding = b
-            self?.appDelegate?.rebindAllWindowsHotKey(to: b)
+            self?.host?.rebindAllWindowsHotKey(to: b)
         }
 
         let hotkeysHint = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
@@ -183,11 +192,8 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         // — Exclusions section —
         let exclusionsHeader = sectionLabel("Auto-Center Exclusions")
         let exclusionsHint   = hintLabel("Apps listed here will never be auto-centered when focused.")
-        excludedIDs          = UserDefaults.standard.excludedBundleIDs.sorted()
+        excludedIDs          = Array(host?.settings.excludedBundleIDs ?? []).sorted()
 
-        // buildTableView sets self.tableView as a side effect and returns the
-        // enclosing scroll view. Keeping setup and layout in separate methods
-        // makes each one easier to read and test independently.
         let scrollView = buildTableView()
 
         let addButton = NSButton(title: "Add App…", target: self, action: #selector(addExclusion))
@@ -226,8 +232,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    /// Creates and configures the table view, assigning `self.tableView`.
-    /// Returns the enclosing NSScrollView ready to be added to the hierarchy.
     private func buildTableView() -> NSScrollView {
         let tv = NSTableView()
         tv.dataSource = self
@@ -246,7 +250,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         return sv
     }
 
-    /// Activates all Auto Layout constraints for the preferences window.
     private func applyConstraints(
         in cv:             NSView,
         hotkeysHeader:     NSView,
@@ -322,8 +325,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         openPanel = panel
         panel.begin { [weak self] response in
             guard let self else { return }
-            // Clear the reference first so windowWillClose won't cancel an
-            // already-completed panel.
             self.openPanel = nil
             guard response == .OK,
                   let url = panel.url,
@@ -350,7 +351,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func saveExclusions() {
-        appDelegate?.setExcludedBundleIDs(Set(excludedIDs))
+        host?.setExcludedBundleIDs(Set(excludedIDs))
     }
 
     // MARK: - Label factory helpers

@@ -36,6 +36,15 @@ private final class ObserverBox {
         self.axObserver = axObserver
         self.owner      = owner
     }
+
+    static func retain(_ observer: AXObserver, owner: WindowObserver) -> UnsafeMutableRawPointer {
+        let box = ObserverBox(observer, owner: owner)
+        return Unmanaged.passRetained(box).toOpaque()
+    }
+
+    static func release(_ box: ObserverBox) {
+        _ = Unmanaged<ObserverBox>.passUnretained(box).takeRetainedValue()
+    }
 }
 
 // MARK: - WindowObserver
@@ -53,7 +62,7 @@ final class WindowObserver {
     private var boxes       = [pid_t: ObserverBox]()
     private var bundleIDs   = [pid_t: String]()
     private var isObserving = false
-    private var pendingRetry = [NSRunningApplication: Int]()
+    private var pendingRetry = [pid_t: Int]()
     private var retryTimer:  Timer?
 
     // MARK: - Lifecycle
@@ -64,7 +73,7 @@ final class WindowObserver {
 
         NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular }
-            .forEach { addObserver(for: $0) }
+            .forEach { addObserver(forPID: $0.processIdentifier, bundleID: $0.bundleIdentifier) }
 
         let nc = NSWorkspace.shared.notificationCenter
         nc.addObserver(self, selector: #selector(appLaunched(_:)),
@@ -87,7 +96,7 @@ final class WindowObserver {
 
         boxes.values.forEach { box in
             removeRunLoopSource(for: box.axObserver)
-            releaseRetainedRefcon(for: box)
+            ObserverBox.release(box)
         }
         boxes.removeAll()
         bundleIDs.removeAll()
@@ -99,68 +108,62 @@ final class WindowObserver {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
                 as? NSRunningApplication
         else { return }
-        addObserver(for: app)
+        addObserver(forPID: app.processIdentifier, bundleID: app.bundleIdentifier)
     }
 
     @objc private func appTerminated(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
                 as? NSRunningApplication
         else { return }
-        pendingRetry.removeValue(forKey: app)
+        pendingRetry.removeValue(forKey: app.processIdentifier)
         removeObserver(for: app.processIdentifier)
     }
 
     // MARK: - AX observer management
 
-    private func addObserver(for app: NSRunningApplication) {
-        let pid = app.processIdentifier
+    private func addObserver(forPID pid: pid_t, bundleID: String?) {
         guard boxes[pid] == nil else { return }
 
         var axObserver: AXObserver?
         let result = AXObserverCreate(pid, axObserverCallback, &axObserver)
 
         guard result == .success, let axObserver else {
-            scheduleRetry(for: app)
+            scheduleRetry(forPID: pid)
             return
         }
 
-        let box    = ObserverBox(axObserver, owner: self)
-        let boxPtr = Unmanaged.passRetained(box).toOpaque()
+        let refcon = ObserverBox.retain(axObserver, owner: self)
 
         let appElement = AXUIElementCreateApplication(pid)
         for name in [kAXWindowCreatedNotification,
                      kAXWindowDeminiaturizedNotification,
                      kAXFocusedWindowChangedNotification] {
-            AXObserverAddNotification(axObserver, appElement, name as CFString, boxPtr)
+            AXObserverAddNotification(axObserver, appElement, name as CFString, refcon)
         }
 
         addRunLoopSource(for: axObserver)
-        boxes[pid]     = box
-        bundleIDs[pid] = app.bundleIdentifier
-        pendingRetry.removeValue(forKey: app)
+        let box       = Unmanaged<ObserverBox>.fromOpaque(refcon).takeUnretainedValue()
+        boxes[pid]    = box
+        bundleIDs[pid] = bundleID
+        pendingRetry.removeValue(forKey: pid)
     }
 
     private func removeObserver(for pid: pid_t) {
         guard let box = boxes.removeValue(forKey: pid) else { return }
         bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: box.axObserver)
-        releaseRetainedRefcon(for: box)
-    }
-
-    private func releaseRetainedRefcon(for box: ObserverBox) {
-        // Balance the passRetained from addObserver.
-        _ = Unmanaged<ObserverBox>.passUnretained(box).takeRetainedValue()
+        ObserverBox.release(box)
     }
 
     // MARK: - Retry
 
-    private func scheduleRetry(for app: NSRunningApplication) {
-        let attempts = pendingRetry[app, default: 0]
+    private func scheduleRetry(forPID pid: pid_t) {
+        let attempts = pendingRetry[pid, default: 0]
         guard attempts < kMaxRetryAttempts else {
-            pendingRetry.removeValue(forKey: app)
+            pendingRetry.removeValue(forKey: pid)
             return
         }
-        pendingRetry[app] = attempts + 1
+        pendingRetry[pid] = attempts + 1
         if retryTimer == nil {
             let t = Timer(timeInterval: kRetryInterval, repeats: true) { [weak self] _ in
                 self?.retryPending()
@@ -176,7 +179,12 @@ final class WindowObserver {
             retryTimer = nil
             return
         }
-        for app in Array(pendingRetry.keys) { addObserver(for: app) }
+        for pid in Array(pendingRetry.keys) {
+            let appElement = AXUIElementCreateApplication(pid)
+            var appPID: pid_t = 0
+            AXUIElementGetPid(appElement, &appPID)
+            addObserver(forPID: appPID, bundleID: bundleIDs[pid])
+        }
     }
 
     // MARK: - Run-loop helpers
