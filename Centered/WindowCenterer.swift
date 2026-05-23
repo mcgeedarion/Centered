@@ -3,24 +3,14 @@
 // Centered
 //
 // All window-centering logic: AX attribute reads, ease-out animation, and the
-// AppleScript fallback path. AppDelegate owns one instance and delegates to it.
+// AppleScript fallback path via AppleScriptCenterer. AppCenteringController
+// owns one instance and delegates to it.
 //
 // @MainActor: AX callbacks and hotkey handlers both run on the main thread.
-//
-// AppleScript note:
-//   executeAppleScriptCentering dispatches to a background queue because
-//   NSAppleScript.executeAndReturnError is synchronous and can stall the
-//   main run loop for hundreds of milliseconds.
-//
-//   SECURITY: bundle ID is validated with three checks before interpolation:
-//     1. Character allowlist (alphanumerics + '.-')
-//     2. Length bound (≤ 255)
-//     3. Cross-verification against NSRunningApplication to block spoof attacks
 //
 
 import Cocoa
 import ApplicationServices
-import os.log
 
 private let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "Centered",
@@ -33,50 +23,74 @@ private let logger = Logger(
 private let kAnimationSteps = 16
 private let kAnimationInterval: TimeInterval = 0.012
 
-// MARK: - Bundle-ID validation
+// MARK: - AXWindow wrapper
 
-private let kBundleIDAllowedChars = CharacterSet(
-    charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-"
-)
-private let kBundleIDMaxLength: Int = 255
+private struct AXWindow: Hashable {
+    let element: AXUIElement
 
-private let appleScriptQueue = DispatchQueue(label: "com.centered.applescript", qos: .userInitiated)
+    init(_ element: AXUIElement) {
+        self.element = element
+    }
 
-// MARK: - AX helpers
+    // AXUIElement is not Hashable; hash by pid + pointer identity.
+    func hash(into hasher: inout Hasher) {
+        var pid: pid_t = 0
+        AXUIElementGetPid(element, &pid)
+        hasher.combine(pid)
+        hasher.combine(Unmanaged.passUnretained(element).toOpaque())
+    }
 
-private func axElement(_ object: AnyObject) -> AXUIElement? {
-    CFGetTypeID(object) == AXUIElementGetTypeID() ? (object as? AXUIElement) : nil
-}
+    static func == (lhs: AXWindow, rhs: AXWindow) -> Bool {
+        lhs.element === rhs.element
+    }
 
-private func axBool(_ element: AXUIElement, attribute: String) -> Bool? {
-    var raw: AnyObject?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success
-    else { return nil }
-    return raw as? Bool
-}
+    var isValid: Bool {
+        var raw: AnyObject?
+        let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw)
+        return err != .invalidUIElement && err != .cannotComplete
+    }
 
-private func axValue(_ element: AXUIElement, attribute: String) -> AXValue? {
-    var raw: AnyObject?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
-          let value = raw,
-          CFGetTypeID(value) == AXValueGetTypeID(),
-          let axVal = value as? AXValue
-    else { return nil }
-    return axVal
-}
+    var isMinimized: Bool? { bool(for: kAXMinimizedAttribute) }
+    var isMain: Bool?      { bool(for: kAXMainAttribute) }
 
-private func axElementAttr(_ element: AXUIElement, attribute: String) -> AXUIElement? {
-    var raw: AnyObject?
-    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
-          let value = raw
-    else { return nil }
-    return axElement(value)
-}
+    var size: CGSize? {
+        guard let value = axValue(for: kAXSizeAttribute) else { return nil }
+        var size = CGSize()
+        guard AXValueGetValue(value, .cgSize, &size), size.width > 0, size.height > 0
+        else { return nil }
+        return size
+    }
 
-private func axIsValid(_ element: AXUIElement) -> Bool {
-    var raw: AnyObject?
-    let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw)
-    return err != .invalidUIElement && err != .cannotComplete
+    var position: CGPoint? {
+        guard let value = axValue(for: kAXPositionAttribute) else { return nil }
+        var point = CGPoint()
+        guard AXValueGetValue(value, .cgPoint, &point) else { return nil }
+        return point
+    }
+
+    func setPosition(_ point: CGPoint) {
+        var p = point
+        if let val = AXValueCreate(.cgPoint, &p) {
+            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, val)
+        }
+    }
+
+    private func bool(for attribute: String) -> Bool? {
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success
+        else { return nil }
+        return raw as? Bool
+    }
+
+    private func axValue(for attribute: String) -> AXValue? {
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
+              let value = raw,
+              CFGetTypeID(value) == AXValueGetTypeID(),
+              let axVal = value as? AXValue
+        else { return nil }
+        return axVal
+    }
 }
 
 // MARK: - WindowCenterer
@@ -86,21 +100,35 @@ final class WindowCenterer {
 
     var selectedScreen: NSScreen?
     private(set) var isCentering = false
-    private var animationWorkItems: [DispatchWorkItem] = []
+
+    // Track animation tokens per window so we can cancel/replace cleanly.
+    private var animationTokens: [AXWindow: DispatchWorkItem] = [:]
+
+    // Debounce repeated events for the same window.
+    private var debounceTokens: [AXWindow: DispatchWorkItem] = [:]
+    private let debounceInterval: TimeInterval = 0.03
 
     // MARK: - Public API
 
     /// Centers `window` on the selected (or main) screen.
-    /// Skips minimized and non-main windows; a nil axBool is treated permissively.
-    func center(window: AXUIElement) {
-        guard axBool(window, attribute: kAXMinimizedAttribute) != true,
-              axBool(window, attribute: kAXMainAttribute)      != false
+    /// Skips minimized and non-main windows; a nil isMinimized/isMain is treated permissively.
+    func center(window element: AXUIElement) {
+        center(window: AXWindow(element))
+    }
+
+    private func center(window: AXWindow) {
+        // Basic filtering: skip explicitly minimized or non-main windows.
+        guard window.isMinimized != true,
+              window.isMain      != false
         else { return }
 
-        if !centerViaAX(window: window),
-           let app = NSWorkspace.shared.frontmostApplication {
-            centerFrontmostWithAppleScript(app)
+        // Debounce rapid-fire events for this window.
+        let token = DispatchWorkItem { [weak self] in
+            self?.performCenter(window: window)
         }
+        debounceTokens[window]?.cancel()
+        debounceTokens[window] = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + debounceInterval, execute: token)
     }
 
     /// Centers the focused window of the frontmost app; falls back to AppleScript.
@@ -108,12 +136,12 @@ final class WindowCenterer {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
 
-        if let win = axElementAttr(el, attribute: kAXFocusedWindowAttribute) {
+        if let win = axFocusedWindow(in: el) {
             center(window: win)
         } else if let win = axWindows(el)?.first {
             center(window: win)
         } else {
-            centerFrontmostWithAppleScript(app)
+            AppleScriptCenterer.centerFrontmostWindow(of: app)
         }
     }
 
@@ -123,21 +151,42 @@ final class WindowCenterer {
         let el = AXUIElementCreateApplication(app.processIdentifier)
 
         guard let windows = axWindows(el), !windows.isEmpty else {
-            centerFrontmostWithAppleScript(app)
+            AppleScriptCenterer.centerFrontmostWindow(of: app)
             return
         }
 
         var anyFailed = false
-        for win in windows where axBool(win, attribute: kAXMinimizedAttribute) != true {
-            if !centerViaAX(window: win) { anyFailed = true }
+        for w in windows where w.isMinimized != true {
+            if !centerViaAX(window: w) { anyFailed = true }
         }
-        if anyFailed { centerFrontmostWithAppleScript(app) }
+        if anyFailed {
+            AppleScriptCenterer.centerFrontmostWindow(of: app)
+        }
     }
 
     func cancelAnimation() {
-        animationWorkItems.forEach { $0.cancel() }
-        animationWorkItems.removeAll()
+        animationTokens.values.forEach { $0.cancel() }
+        animationTokens.removeAll()
+        debounceTokens.values.forEach { $0.cancel() }
+        debounceTokens.removeAll()
         isCentering = false
+    }
+
+    // MARK: - Internal centering
+
+    private func performCenter(window: AXWindow) {
+        guard !isCenteringElsewhere(window: window) else { return }
+        if !centerViaAX(window: window),
+           let app = NSWorkspace.shared.frontmostApplication {
+            AppleScriptCenterer.centerFrontmostWindow(of: app)
+        }
+    }
+
+    private func isCenteringElsewhere(window: AXWindow) -> Bool {
+        if let token = animationTokens[window], !token.isCancelled {
+            return true
+        }
+        return false
     }
 
     // MARK: - Geometry
@@ -165,23 +214,12 @@ final class WindowCenterer {
         )
     }
 
-    nonisolated static func isValidAppleScriptBundleID(_ bundleID: String) -> Bool {
-        !bundleID.isEmpty &&
-        bundleID.count <= kBundleIDMaxLength &&
-        bundleID.unicodeScalars.allSatisfy { kBundleIDAllowedChars.contains($0) }
-    }
-
     // MARK: - AX centering
 
     @discardableResult
-    private func centerViaAX(window: AXUIElement) -> Bool {
-        guard let screen  = selectedScreen ?? NSScreen.main,
-              let sizeVal = axValue(window, attribute: kAXSizeAttribute)
-        else { return false }
-
-        var size = CGSize()
-        guard AXValueGetValue(sizeVal, .cgSize, &size),
-              size.width > 0, size.height > 0
+    private func centerViaAX(window: AXWindow) -> Bool {
+        guard let screen = selectedScreen ?? NSScreen.main,
+              let size   = window.size
         else { return false }
 
         let target = CGPoint.centeredOrigin(of: size, in: screen.visibleFrame)
@@ -189,35 +227,36 @@ final class WindowCenterer {
         return true
     }
 
-    private func animateWindowPosition(_ window: AXUIElement, to target: CGPoint) {
-        guard let posVal = axValue(window, attribute: kAXPositionAttribute) else { return }
-        var start = CGPoint()
-        guard AXValueGetValue(posVal, .cgPoint, &start), start != target else { return }
+    private func animateWindowPosition(_ window: AXWindow, to target: CGPoint) {
+        guard let start = window.position, start != target else { return }
 
         isCentering = true
         let token   = DispatchWorkItem {}
-        animationWorkItems.append(token)
-        let posKey  = kAXPositionAttribute as CFString
+        animationTokens[window]?.cancel()
+        animationTokens[window] = token
 
         func finish() {
-            animationWorkItems.removeAll { $0 === token }
-            if animationWorkItems.isEmpty { isCentering = false }
+            if let current = animationTokens[window], current === token {
+                animationTokens.removeValue(forKey: window)
+            }
+            if animationTokens.isEmpty { isCentering = false }
         }
 
         func step(_ i: Int) {
             guard i <= kAnimationSteps,
                   !token.isCancelled,
-                  axIsValid(window)
+                  window.isValid
             else { finish(); return }
 
-            var pos = WindowCenterer.animationPosition(
+            let pos = WindowCenterer.animationPosition(
                 from: start, to: target, step: i, totalSteps: kAnimationSteps
             )
-            if let val = AXValueCreate(.cgPoint, &pos) {
-                AXUIElementSetAttributeValue(window, posKey, val)
-            }
+            window.setPosition(pos)
+
             if i < kAnimationSteps {
-                DispatchQueue.main.asyncAfter(deadline: .now() + kAnimationInterval) { step(i + 1) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + kAnimationInterval) {
+                    step(i + 1)
+                }
             } else {
                 finish()
             }
@@ -226,67 +265,27 @@ final class WindowCenterer {
         step(1)
     }
 
-    private func axWindows(_ el: AXUIElement) -> [AXUIElement]? {
+    // MARK: - AX helpers
+
+    private func axFocusedWindow(in appElement: AXUIElement) -> AXWindow? {
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &raw) == .success,
+              let value = raw,
+              CFGetTypeID(value) == AXUIElementGetTypeID(),
+              let el = value as? AXUIElement
+        else { return nil }
+        return AXWindow(el)
+    }
+
+    private func axWindows(_ el: AXUIElement) -> [AXWindow]? {
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &raw) == .success,
               let list = raw as? [AnyObject]
         else { return nil }
-        return list.compactMap { axElement($0) }
-    }
-
-    // MARK: - AppleScript fallback
-
-    private func centerFrontmostWithAppleScript(_ app: NSRunningApplication) {
-        guard let bid = app.bundleIdentifier else {
-            logger.debug("AppleScript fallback skipped: no bundle ID for pid \(app.processIdentifier)")
-            return
-        }
-        executeAppleScriptCentering(bundleID: bid, app: app)
-    }
-
-    private func executeAppleScriptCentering(bundleID: String, app: NSRunningApplication) {
-        guard WindowCenterer.isValidAppleScriptBundleID(bundleID) else {
-            logger.debug("Rejected bundle ID with invalid format")
-            return
-        }
-        guard NSRunningApplication
-                .runningApplications(withBundleIdentifier: bundleID)
-                .contains(where: { $0.processIdentifier == app.processIdentifier })
-        else {
-            logger.debug("Rejected bundle ID \(bundleID, privacy: .public): pid mismatch (possible spoof)")
-            return
-        }
-
-        let script = """
-        tell application id \"\(bundleID)\"
-            activate
-            try
-                set win to front window
-                set winBounds to bounds of win
-                tell application "System Events" to tell first desktop
-                    set screenBounds to bounds
-                    set screenWidth  to item 3 of screenBounds
-                    set screenHeight to item 4 of screenBounds
-                end tell
-                set winWidth  to item 3 of winBounds - item 1 of winBounds
-                set winHeight to item 4 of winBounds - item 2 of winBounds
-                set newX to (screenWidth  - winWidth)  / 2
-                set newY to (screenHeight - winHeight) / 2
-                try
-                    set bounds of win to {newX, newY, newX + winWidth, newY + winHeight} with animation
-                on error
-                    set position of win to {newX, newY}
-                    set size     of win to {winWidth, winHeight}
-                end try
-            end try
-        end tell
-        """
-        appleScriptQueue.async {
-            var error: NSDictionary?
-            _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
-            if let error {
-                logger.debug("AppleScript error (\(bundleID, privacy: .public)): \(error)")
-            }
+        return list.compactMap { obj in
+            guard CFGetTypeID(obj) == AXUIElementGetTypeID(),
+                  let el = obj as? AXUIElement else { return nil }
+            return AXWindow(el)
         }
     }
 }
