@@ -1,24 +1,8 @@
-//
-// UserDefaults+Centered.swift
-// Centered
-//
-// Typed accessors for every preference key the app persists.
-// All raw key strings live here — nowhere else in the codebase.
-//
-// Security — excludedBundleIDs integrity protection:
-//   An HMAC-SHA256 tag over the serialised exclusion list is stored in the
-//   Keychain. Reads fail closed (return []) on tag mismatch or absence.
-//
-//   Keychain item: service = bundle ID, account = "excludedBundleIDsHMAC"
-//
-
 import Foundation
 import Security
 import CryptoKit
 
 extension UserDefaults {
-
-    // MARK: - Keys
 
     private enum Key {
         static let selectedScreenName = "selectedScreenName"
@@ -27,14 +11,10 @@ extension UserDefaults {
         static let excludedBundleIDs  = "excludedBundleIDs"
     }
 
-    // MARK: - Screen
-
     var selectedScreenName: String? {
         get { string(forKey: Key.selectedScreenName) }
         set { set(newValue, forKey: Key.selectedScreenName) }
     }
-
-    // MARK: - Hotkeys
 
     var centerActiveBinding: HotKeyBinding {
         get {
@@ -56,8 +36,6 @@ extension UserDefaults {
         set { set(newValue.dictionaryRepresentation, forKey: Key.centerAllHotKey) }
     }
 
-    // MARK: - Exclusion list
-
     /// Reads fail closed (returns []) if the Keychain HMAC is missing or invalid.
     var excludedBundleIDs: Set<String> {
         get {
@@ -72,8 +50,6 @@ extension UserDefaults {
     }
 }
 
-// MARK: - HMAC helpers
-
 private enum ExclusionHMAC {
 
     private static let service = Bundle.main.bundleIdentifier ?? "Centered"
@@ -84,8 +60,6 @@ private enum ExclusionHMAC {
     private static func serialise(_ ids: Set<String>) -> Data {
         ids.sorted().joined(separator: "\n").data(using: .utf8) ?? Data()
     }
-
-    // MARK: HMAC key
 
     /// Returns the persisted 256-bit key, generating and storing one on first use.
     private static func hmacKey() -> SymmetricKey {
@@ -127,8 +101,6 @@ private enum ExclusionHMAC {
         return newKey
     }
 
-    // MARK: Tag storage
-
     private static func loadTag() -> Data? {
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
@@ -161,8 +133,6 @@ private enum ExclusionHMAC {
             SecItemAdd(attrs as CFDictionary, nil)
         }
     }
-
-    // MARK: Public API
 
     static func store(_ ids: Set<String>) {
         let tag = HMAC<SHA256>.authenticationCode(for: serialise(ids), using: hmacKey())

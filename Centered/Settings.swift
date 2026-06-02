@@ -1,12 +1,3 @@
-//
-// Settings.swift
-// Centered
-//
-// Typed settings facade over UserDefaults, used by the app delegate,
-// preferences window, and observers. This keeps raw keys confined to
-// UserDefaults+Centered and provides a single place for validation.
-//
-
 import Foundation
 
 protocol Settings {

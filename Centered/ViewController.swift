@@ -1,10 +1,3 @@
-//
-// ViewController.swift
-// Centered
-//
-// Created by Darion McGee on 7/22/25.
-//
-
 import Cocoa
 
 @MainActor
@@ -16,8 +9,6 @@ class ViewController: NSViewController {
 
     @IBOutlet weak var toggleSwitch: NSSwitch!
     @IBOutlet weak var statusIndicator: NSImageView!
-
-    // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -36,18 +27,12 @@ class ViewController: NSViewController {
         NotificationCenter.default.removeObserver(self)
     }
 
-    // MARK: - Actions
-
     @IBAction func toggleSwitchChanged(_ sender: NSSwitch) {
         guard let appDelegate else { return }
         sender.state == .on ? appDelegate.enableApp() : appDelegate.disableApp()
         updateUI()
     }
 
-    // MARK: - UI update
-
-    // @MainActor guarantees this always runs on the main thread — the
-    // Thread.isMainThread branch in the previous version was redundant.
     @objc private func updateUI() {
         guard let enabled = appDelegate?.isEnabled else {
             toggleSwitch.isEnabled = false

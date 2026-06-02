@@ -1,12 +1,3 @@
-//
-// AppDelegate.swift
-// Centered
-//
-// Coordinator: owns the status-bar item, permission checks, and the
-// enable/disable lifecycle. Centering logic → AppCenteringController;
-// AX observation → WindowObserver.
-//
-
 import Cocoa
 import ApplicationServices
 import os.log
@@ -16,14 +7,10 @@ private let logger = Logger(
     category: "AppDelegate"
 )
 
-// MARK: - Notification names
-
 extension Notification.Name {
     static let appStateChanged = Notification.Name("appStateChanged")
     static let hotkeyPressed  = Notification.Name("hotkeyPressed")
 }
-
-// MARK: - AppCoordinator protocol
 
 protocol AppCoordinating: AnyObject {
     var selectedScreen: NSScreen? { get set }
@@ -41,8 +28,6 @@ protocol AppCoordinating: AnyObject {
     func setExcludedBundleIDs(_ ids: Set<String>)
     func preferencesWindowDidClose()
 }
-
-// MARK: - AppDelegate
 
 @MainActor
 @main
@@ -63,12 +48,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-// MARK: - AppCenteringController
-
 @MainActor
 final class AppCenteringController: NSObject, AppCoordinating {
-
-    // MARK: - Sub-systems
 
     private let centerer: WindowCenterer
     private let observer: WindowObserver
@@ -88,14 +69,10 @@ final class AppCenteringController: NSObject, AppCoordinating {
         NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
     }
 
-    // MARK: - State
-
     private var statusItem: NSStatusItem?
     private var preferencesWindowController: PreferencesWindowController?
     private var permissionTimer: Timer?
     private(set) var isEnabled = false
-
-    // MARK: - Init
 
     init(settings: Settings, windowCenterer: WindowCenterer, windowObserver: WindowObserver) {
         self.settings = settings
@@ -103,8 +80,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
         self.observer = windowObserver
         super.init()
     }
-
-    // MARK: - Screen selection
 
     var selectedScreen: NSScreen? {
         get { centerer.selectedScreen }
@@ -114,8 +89,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
         }
     }
 
-    // MARK: - Launch at login
-
     var launchAtLogin: Bool {
         get { LaunchAtLoginService.isEnabled }
         set {
@@ -123,8 +96,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
             rebuildActionsSection()
         }
     }
-
-    // MARK: - App lifecycle
 
     func applicationDidFinishLaunching() {
         setupStatusItem()
@@ -141,8 +112,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
         disableApp()
     }
 
-    // MARK: - Hotkey rebind
-
     func rebindHotKey(to binding: HotKeyBinding) {
         settings.centerActiveBinding = binding
         hotKey.rebind(to: binding)
@@ -155,20 +124,14 @@ final class AppCenteringController: NSObject, AppCoordinating {
         rebuildActionsSection()
     }
 
-    // MARK: - Exclusion list
-
     func setExcludedBundleIDs(_ ids: Set<String>) {
         settings.excludedBundleIDs = ids
         observer.excludedBundleIDs = ids
     }
 
-    // MARK: - Preferences window
-
     func preferencesWindowDidClose() {
         preferencesWindowController = nil
     }
-
-    // MARK: - Screen persistence
 
     private func restoreSelectedScreen() {
         guard let name = settings.selectedScreenName else { return }
@@ -183,13 +146,9 @@ final class AppCenteringController: NSObject, AppCoordinating {
         rebuildScreenSection()
     }
 
-    // MARK: - Permissions
-
     private func showPermissionAlert() {
         AccessibilityAuthorization.showAlertIfNeeded()
     }
-
-    // MARK: - Enable / Disable
 
     func enableApp() {
         guard !isEnabled else { return }
@@ -215,8 +174,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
-    // MARK: - Manual triggers
-
     func centerActiveWindowManually() {
         guard isEnabled else { return }
         centerer.centerFrontmost()
@@ -226,8 +183,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
         guard isEnabled else { return }
         centerer.centerAllWindows()
     }
-
-    // MARK: - Status bar menu
 
     private enum MenuSection: Int {
         case screens = 100, actions = 200, system = 300
@@ -366,8 +321,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // MARK: - Permission checks
-
     private func startPermissionChecks() {
         stopPermissionChecks()
 
@@ -414,8 +367,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
     }
 }
 
-// MARK: - LaunchAtLoginService
-
 enum LaunchAtLoginService {
     static var isAvailable: Bool {
         if #available(macOS 13, *) { true } else { false }
@@ -439,8 +390,6 @@ enum LaunchAtLoginService {
         }
     }
 }
-
-// MARK: - AccessibilityAuthorization
 
 enum AccessibilityAuthorization {
     static var isTrusted: Bool { AXIsProcessTrusted() }
@@ -466,8 +415,6 @@ enum AccessibilityAuthorization {
         NSWorkspace.shared.open(url)
     }
 }
-
-// MARK: - CFNotification callback
 
 private let accessibilityChangedCallback: CFNotificationCallback = { _, observer, _, _, _ in
     guard let observer else { return }

@@ -1,25 +1,5 @@
-//
-// PreferencesWindowController.swift
-// Centered
-//
-// Programmatic preferences window — no XIB or Storyboard required.
-//
-// Sections:
-//   1. Hotkeys    — key recorder fields for both shortcuts
-//   2. Exclusions — add/remove apps from the auto-center exclusion list
-//   3. About      — bundle version string
-//
-// Window lifecycle:
-//   windowDidBecomeKey  — reloads all fields from Settings
-//   windowWillClose     — cancels any open NSOpenPanel; notifies host
-//                         to nil its preferencesWindowController reference
-//                         so the window and all subviews are released.
-//
-
 import Cocoa
 import Carbon.HIToolbox
-
-// MARK: - PreferencesHost
 
 protocol PreferencesHost: AnyObject {
     var settings: Settings { get }
@@ -28,8 +8,6 @@ protocol PreferencesHost: AnyObject {
     func setExcludedBundleIDs(_ ids: Set<String>)
     func preferencesWindowDidClose()
 }
-
-// MARK: - KeyRecorderField
 
 final class KeyRecorderField: NSTextField {
 
@@ -109,8 +87,6 @@ final class KeyRecorderField: NSTextField {
     }
 }
 
-// MARK: - PreferencesWindowController
-
 @MainActor
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
@@ -121,8 +97,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     private var removeButton:       NSButton!
     private var excludedIDs:        [String] = []
     private var openPanel:          NSOpenPanel?
-
-    // MARK: - Init
 
     init(host: PreferencesHost) {
         self.host = host
@@ -139,8 +113,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         buildUI()
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
-
-    // MARK: - NSWindowDelegate
 
     func windowDidBecomeKey(_ notification: Notification) {
         guard let settings = host?.settings else { return }
@@ -160,12 +132,9 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         host?.preferencesWindowDidClose()
     }
 
-    // MARK: - UI construction
-
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
-        // — Hotkeys section —
         let hotkeysHeader = sectionLabel("Hotkeys")
         let activeLabel   = fieldLabel("Center Active Window")
         let allLabel      = fieldLabel("Center All Windows")
@@ -189,7 +158,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
         let hotkeysHint = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
 
-        // — Exclusions section —
         let exclusionsHeader = sectionLabel("Auto-Center Exclusions")
         let exclusionsHint   = hintLabel("Apps listed here will never be auto-centered when focused.")
         excludedIDs          = Array(host?.settings.excludedBundleIDs ?? []).sorted()
@@ -203,7 +171,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         removeButton.bezelStyle = .rounded
         removeButton.isEnabled  = false
 
-        // — About section —
         let version    = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let aboutLabel = hintLabel("Centered v\(version) — personal use build")
 
@@ -314,8 +281,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         ])
     }
 
-    // MARK: - Exclusion actions
-
     @objc private func addExclusion() {
         let panel = NSOpenPanel()
         panel.title                   = "Choose an Application"
@@ -354,8 +319,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         host?.setExcludedBundleIDs(Set(excludedIDs))
     }
 
-    // MARK: - Label factory helpers
-
     private func sectionLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
         l.font = .boldSystemFont(ofSize: 13)
@@ -373,8 +336,6 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         return l
     }
 }
-
-// MARK: - NSTableViewDataSource / NSTableViewDelegate
 
 extension PreferencesWindowController: NSTableViewDataSource, NSTableViewDelegate {
 

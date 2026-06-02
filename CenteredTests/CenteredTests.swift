@@ -1,16 +1,7 @@
-//
-//  CenteredTests.swift
-//  CenteredTests
-//
-//  Created by Darion McGee on 7/25/25.
-//
-
 import Testing
 import Cocoa
 import CoreGraphics
 @testable import Centered
-
-// MARK: - centeredOrigin(windowSize:in:)
 
 @Suite("WindowCenterer geometry")
 struct CenteredOriginTests {
@@ -47,28 +38,24 @@ struct CenteredOriginTests {
         #expect(origin.y == (CGFloat(800) - CGFloat(400)) / 2)
     }
 
-    /// Large window bigger than the screen should produce a negative origin
-    /// (window extends off-screen but is still geometrically centred).
     @Test func windowLargerThanScreen() {
         let screen = CGRect(x: 0, y: 0, width: 1280, height: 800)
         let window = CGSize(width: 1920, height: 1080)
         let origin = WindowCenterer.centeredOrigin(windowSize: window, in: screen)
-        #expect(origin.x == CGFloat(1280) / 2 - CGFloat(1920) / 2)  // -320
-        #expect(origin.y == CGFloat(800)  / 2 - CGFloat(1080) / 2)  // -140
+        #expect(origin.x == CGFloat(1280) / 2 - CGFloat(1920) / 2)
+        #expect(origin.y == CGFloat(800)  / 2 - CGFloat(1080) / 2)
         #expect(origin.x < 0)
         #expect(origin.y < 0)
     }
 
-    /// Retina / HiDPI: non-integer screen dimensions should not cause drift.
     @Test func nonIntegerScreenDimensions() {
         let screen = CGRect(x: 0, y: 0, width: 1680, height: 1050)
         let window = CGSize(width: 900, height: 700)
         let origin = WindowCenterer.centeredOrigin(windowSize: window, in: screen)
-        #expect(origin.x == (CGFloat(1680) - CGFloat(900)) / 2)  // 390.0
-        #expect(origin.y == (CGFloat(1050) - CGFloat(700)) / 2)  // 175.0
+        #expect(origin.x == (CGFloat(1680) - CGFloat(900)) / 2)
+        #expect(origin.y == (CGFloat(1050) - CGFloat(700)) / 2)
     }
 
-    /// Zero-size window: should produce the screen midpoint as origin.
     @Test func zeroSizeWindow() {
         let screen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
         let window = CGSize(width: 0, height: 0)
@@ -77,8 +64,6 @@ struct CenteredOriginTests {
         #expect(origin.y == 540)
     }
 
-    /// Origin of the centred window should always be within screen bounds
-    /// for any window smaller than the screen.
     @Test func originIsWithinScreenBoundsForSmallWindows() {
         let screen = CGRect(x: 0, y: 0, width: 2560, height: 1440)
         let sizes: [CGSize] = [
@@ -95,8 +80,6 @@ struct CenteredOriginTests {
     }
 }
 
-// MARK: - animationPosition(from:to:step:totalSteps:)
-
 @Suite("WindowCenterer animation steps")
 struct AnimationPositionTests {
 
@@ -108,8 +91,6 @@ struct AnimationPositionTests {
         #expect(pos == start)
     }
 
-    /// Use approximate equality for final step to guard against float drift
-    /// with arbitrary start/end values.
     @Test func finalStepIsApproxEnd() {
         let pos = WindowCenterer.animationPosition(from: start, to: end, step: 10, totalSteps: 10)
         #expect(abs(pos.x - end.x) < 1e-10)
@@ -148,15 +129,12 @@ struct AnimationPositionTests {
         #expect(abs(pos.y - to.y) < 1e-10)
     }
 
-    /// A single-step animation should jump directly to the end.
     @Test func singleStep() {
         let pos = WindowCenterer.animationPosition(from: start, to: end, step: 1, totalSteps: 1)
         #expect(abs(pos.x - end.x) < 1e-10)
         #expect(abs(pos.y - end.y) < 1e-10)
     }
 
-    /// All steps should lie strictly between start and end (exclusive)
-    /// for a positive-direction move.
     @Test func intermediateStepsAreBetweenStartAndEnd() {
         for i in 1..<10 {
             let pos = WindowCenterer.animationPosition(from: start, to: end, step: i, totalSteps: 10)
@@ -202,8 +180,6 @@ struct AnimationPositionTests {
     }
 }
 
-// MARK: - AppleScript bundle ID validation
-
 @Suite("AppleScript bundle ID validation")
 struct AppleScriptBundleIDValidationTests {
 
@@ -244,8 +220,6 @@ struct AppleScriptBundleIDValidationTests {
     }
 }
 
-
-// MARK: - HotKeyBinding preference decoding
 
 @Suite("HotKeyBinding preference decoding")
 struct HotKeyBindingPreferenceDecodingTests {

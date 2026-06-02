@@ -1,11 +1,3 @@
-//
-// AppleScriptCenterer.swift
-// Centered
-//
-// AppleScript-based centering fallback used when AX positioning fails.
-// Bundle IDs are validated before interpolation to defend against spoofing.
-//
-
 import Cocoa
 import os.log
 
