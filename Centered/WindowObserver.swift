@@ -1,29 +1,8 @@
-//
-// WindowObserver.swift
-// Centered
-//
-// Watches every regular-activation app via AXObserver and fires `onWindowEvent`
-// whenever a window is created, deminiaturized, or focused — unless the app is
-// on the exclusion list.
-//
-// Thread model: all mutable state is @MainActor. The AXObserverCallback C
-// function hops to the main queue before touching `self`.
-//
-// Memory safety: each registration creates an ObserverBox (retained in refcon)
-// with a weak back-reference to WindowObserver. ARC manages the box lifetime;
-// no manual retain accounting is needed. See ObserverBox below.
-//
-// Retry: AXObserverCreate can fail transiently (e.g. kAXErrorAPIDisabled during
-// login). Failed apps are retried up to kMaxRetryAttempts times at kRetryInterval.
-//
-
 import Cocoa
 import ApplicationServices
 
 private let kRetryInterval:    TimeInterval = 2.0
 private let kMaxRetryAttempts: Int          = 5
-
-// MARK: - ObserverBox
 
 /// Sole retained object in the AX callback refcon.
 /// Holds a weak back-reference so the callback can reach WindowObserver
@@ -47,25 +26,17 @@ private final class ObserverBox {
     }
 }
 
-// MARK: - WindowObserver
-
 @MainActor
 final class WindowObserver {
 
-    // MARK: - Public interface
-
     var onWindowEvent: ((AXUIElement) -> Void)?
     var excludedBundleIDs: Set<String> = []
-
-    // MARK: - Private state
 
     private var boxes       = [pid_t: ObserverBox]()
     private var bundleIDs   = [pid_t: String]()
     private var isObserving = false
     private var pendingRetry = [pid_t: Int]()
     private var retryTimer:  Timer?
-
-    // MARK: - Lifecycle
 
     func start() {
         guard !isObserving, AXIsProcessTrusted() else { return }
@@ -102,8 +73,6 @@ final class WindowObserver {
         bundleIDs.removeAll()
     }
 
-    // MARK: - Workspace notifications
-
     @objc private func appLaunched(_ note: Notification) {
         guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey]
                 as? NSRunningApplication
@@ -118,8 +87,6 @@ final class WindowObserver {
         pendingRetry.removeValue(forKey: app.processIdentifier)
         removeObserver(for: app.processIdentifier)
     }
-
-    // MARK: - AX observer management
 
     private func addObserver(forPID pid: pid_t, bundleID: String?) {
         guard boxes[pid] == nil else { return }
@@ -155,8 +122,6 @@ final class WindowObserver {
         ObserverBox.release(box)
     }
 
-    // MARK: - Retry
-
     private func scheduleRetry(forPID pid: pid_t) {
         let attempts = pendingRetry[pid, default: 0]
         guard attempts < kMaxRetryAttempts else {
@@ -187,8 +152,6 @@ final class WindowObserver {
         }
     }
 
-    // MARK: - Run-loop helpers
-
     private func addRunLoopSource(for observer: AXObserver) {
         CFRunLoopAddSource(CFRunLoopGetMain(),
                            AXObserverGetRunLoopSource(observer), .defaultMode)
@@ -199,15 +162,11 @@ final class WindowObserver {
                               AXObserverGetRunLoopSource(observer), .defaultMode)
     }
 
-    // MARK: - Event dispatch
-
     func handleWindowEvent(pid: pid_t, element: AXUIElement) {
         if let id = bundleIDs[pid], excludedBundleIDs.contains(id) { return }
         onWindowEvent?(element)
     }
 }
-
-// MARK: - AX callback
 
 /// refcon is a +1 retained ObserverBox. The callback reaches WindowObserver
 /// through the box's weak `owner` reference.

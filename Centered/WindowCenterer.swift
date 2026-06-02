@@ -1,14 +1,3 @@
-//
-// WindowCenterer.swift
-// Centered
-//
-// All window-centering logic: AX attribute reads, ease-out animation, and the
-// AppleScript fallback path via AppleScriptCenterer. AppCenteringController
-// owns one instance and delegates to it.
-//
-// @MainActor: AX callbacks and hotkey handlers both run on the main thread.
-//
-
 import Cocoa
 import ApplicationServices
 
@@ -17,13 +6,9 @@ private let logger = Logger(
     category: "WindowCenterer"
 )
 
-// MARK: - Animation constants
-
 /// 16 steps × 12 ms ≈ 192 ms total, ~83 fps.
 private let kAnimationSteps = 16
 private let kAnimationInterval: TimeInterval = 0.012
-
-// MARK: - AXWindow wrapper
 
 private struct AXWindow: Hashable {
     let element: AXUIElement
@@ -93,8 +78,6 @@ private struct AXWindow: Hashable {
     }
 }
 
-// MARK: - WindowCenterer
-
 @MainActor
 final class WindowCenterer {
 
@@ -108,21 +91,15 @@ final class WindowCenterer {
     private var debounceTokens: [AXWindow: DispatchWorkItem] = [:]
     private let debounceInterval: TimeInterval = 0.03
 
-    // MARK: - Public API
-
-    /// Centers `window` on the selected (or main) screen.
-    /// Skips minimized and non-main windows; a nil isMinimized/isMain is treated permissively.
     func center(window element: AXUIElement) {
         center(window: AXWindow(element))
     }
 
     private func center(window: AXWindow) {
-        // Basic filtering: skip explicitly minimized or non-main windows.
         guard window.isMinimized != true,
               window.isMain      != false
         else { return }
 
-        // Debounce rapid-fire events for this window.
         let token = DispatchWorkItem { [weak self] in
             self?.performCenter(window: window)
         }
@@ -131,7 +108,6 @@ final class WindowCenterer {
         DispatchQueue.main.asyncAfter(deadline: .now() + debounceInterval, execute: token)
     }
 
-    /// Centers the focused window of the frontmost app; falls back to AppleScript.
     func centerFrontmost() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
@@ -145,7 +121,6 @@ final class WindowCenterer {
         }
     }
 
-    /// Centers every non-minimized window of the frontmost app.
     func centerAllWindows() {
         guard let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
@@ -172,8 +147,6 @@ final class WindowCenterer {
         isCentering = false
     }
 
-    // MARK: - Internal centering
-
     private func performCenter(window: AXWindow) {
         guard !isCenteringElsewhere(window: window) else { return }
         if !centerViaAX(window: window),
@@ -188,8 +161,6 @@ final class WindowCenterer {
         }
         return false
     }
-
-    // MARK: - Geometry
 
     nonisolated static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
         CGPoint(
@@ -213,8 +184,6 @@ final class WindowCenterer {
             y: start.y + (end.y - start.y) * t
         )
     }
-
-    // MARK: - AX centering
 
     @discardableResult
     private func centerViaAX(window: AXWindow) -> Bool {
@@ -265,8 +234,6 @@ final class WindowCenterer {
         step(1)
     }
 
-    // MARK: - AX helpers
-
     private func axFocusedWindow(in appElement: AXUIElement) -> AXWindow? {
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &raw) == .success,
@@ -289,8 +256,6 @@ final class WindowCenterer {
         }
     }
 }
-
-// MARK: - CGPoint convenience
 
 private extension CGPoint {
     static func centeredOrigin(of size: CGSize, in rect: CGRect) -> CGPoint {

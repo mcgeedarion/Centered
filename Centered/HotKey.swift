@@ -1,14 +1,3 @@
-//
-// HotKey.swift
-// Centered
-//
-// Global hotkeys via Carbon RegisterEventHotKey. Only the exact registered
-// combination is ever delivered — no other keystrokes pass through this process.
-//
-// activate / deactivate / rebind must be called on @MainActor.
-// The Carbon event handler fires on the main thread (GetApplicationEventTarget).
-//
-
 import Cocoa
 import Carbon.HIToolbox
 
@@ -30,8 +19,6 @@ extension NSEvent.ModifierFlags {
             .joined()
     }
 }
-
-// MARK: - HotKeyBinding
 
 struct HotKeyBinding: Equatable {
 
@@ -75,8 +62,6 @@ struct HotKeyBinding: Equatable {
     }
 }
 
-// MARK: - Key-code display table
-
 private let kKeyDisplayTable = Dictionary(uniqueKeysWithValues: [
     (kVK_ANSI_A, "A"), (kVK_ANSI_B, "B"), (kVK_ANSI_C, "C"), (kVK_ANSI_D, "D"),
     (kVK_ANSI_E, "E"), (kVK_ANSI_F, "F"), (kVK_ANSI_G, "G"), (kVK_ANSI_H, "H"),
@@ -99,15 +84,11 @@ private func keyCodeDisplayString(_ keyCode: UInt16) -> String {
     kKeyDisplayTable[keyCode] ?? "(\(keyCode))"
 }
 
-// MARK: - HotKey ID allocator
-
 private var _nextHotKeyID: UInt32 = 1
 private func nextHotKeyID() -> EventHotKeyID {
     defer { _nextHotKeyID &+= 1 }
     return EventHotKeyID(signature: 0x43656E74 /* 'Cent' */, id: _nextHotKeyID)
 }
-
-// MARK: - HotKey
 
 @MainActor
 final class HotKey {
@@ -152,8 +133,6 @@ final class HotKey {
     /// Cleanup must happen via explicit deactivate() before the last reference
     /// is dropped. nonisolated deinit intentionally does not touch stored properties.
     nonisolated deinit {}
-
-    // MARK: - Carbon internals
 
     private func installCarbonHandler() {
         guard handlerRef == nil else { return }
@@ -215,8 +194,6 @@ final class HotKey {
         keyDownHandler?()
     }
 }
-
-// MARK: - Carbon callback
 
 private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
     guard let event, let userData else { return noErr }
