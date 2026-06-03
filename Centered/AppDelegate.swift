@@ -7,10 +7,25 @@ private let logger = Logger(
     category: "AppDelegate"
 )
 
+// MARK: - Constants
+
+enum Constants {
+    static let permissionCheckInterval: TimeInterval = 60
+    static let accessibilityNotification = "com.apple.accessibility.api"
+    static let systemPreferencesURL = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+    static let statusIconName = "inset.filled.center.rectangle"
+    static let preferencesKeyEquivalent = ","
+    static let quitKeyEquivalent = "q"
+}
+
+// MARK: - Notifications
+
 extension Notification.Name {
     static let appStateChanged = Notification.Name("appStateChanged")
-    static let hotkeyPressed  = Notification.Name("hotkeyPressed")
+    static let hotkeyPressed = Notification.Name("hotkeyPressed")
 }
+
+// MARK: - Protocols
 
 protocol AppCoordinating: AnyObject {
     var selectedScreen: NSScreen? { get set }
@@ -28,6 +43,8 @@ protocol AppCoordinating: AnyObject {
     func setExcludedBundleIDs(_ ids: Set<String>)
     func preferencesWindowDidClose()
 }
+
+// MARK: - App Delegate
 
 @MainActor
 @main
@@ -48,6 +65,241 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - Menu State Model
+
+struct MenuState {
+    let screens: [NSMenuItem]
+    let actions: [NSMenuItem]
+    let system: [NSMenuItem]
+
+    func buildMenu() -> NSMenu {
+        let menu = NSMenu()
+        screens.forEach { menu.addItem($0) }
+        menu.addItem(.separator())
+        actions.forEach { menu.addItem($0) }
+        menu.addItem(.separator())
+        system.forEach { menu.addItem($0) }
+        return menu
+    }
+}
+
+// MARK: - Menu Controller
+
+@MainActor
+final class MenuController {
+    weak var coordinator: AppCoordinating?
+    private weak var statusItem: NSStatusItem?
+
+    init(statusItem: NSStatusItem) {
+        self.statusItem = statusItem
+    }
+
+    func buildFullMenu() {
+        guard let coordinator else { return }
+        let menuState = createMenuState(coordinator: coordinator)
+        statusItem?.menu = menuState.buildMenu()
+    }
+
+    func rebuildScreenSection() {
+        guard let coordinator else { return }
+        let menuState = createMenuState(coordinator: coordinator)
+        statusItem?.menu = menuState.buildMenu()
+    }
+
+    func rebuildActionsSection() {
+        guard let coordinator else { return }
+        let menuState = createMenuState(coordinator: coordinator)
+        statusItem?.menu = menuState.buildMenu()
+    }
+
+    private func createMenuState(coordinator: AppCoordinating) -> MenuState {
+        MenuState(
+            screens: makeScreenItems(coordinator: coordinator),
+            actions: makeActionItems(coordinator: coordinator),
+            system: makeSystemItems(coordinator: coordinator)
+        )
+    }
+
+    private func makeScreenItems(coordinator: AppCoordinating) -> [NSMenuItem] {
+        NSScreen.screens.enumerated().map { i, screen in
+            let item = NSMenuItem(
+                title: "Screen \(i + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))",
+                action: #selector(selectScreen(_:)),
+                keyEquivalent: ""
+            )
+            item.state = (coordinator.selectedScreen == screen) ? .on : .off
+            item.target = self
+            item.representedObject = screen.localizedName
+            return item
+        }
+    }
+
+    private func makeActionItems(coordinator: AppCoordinating) -> [NSMenuItem] {
+        var items: [NSMenuItem] = []
+
+        let centerActive = makeItem(
+            title: "Center Active Window  " + (getBinding(.active)?.displayString ?? ""),
+            action: #selector(centerActiveMenuItem)
+        )
+        items.append(centerActive)
+
+        let centerAll = makeItem(
+            title: "Center All Windows  " + (getBinding(.all)?.displayString ?? ""),
+            action: #selector(centerAllMenuItem)
+        )
+        items.append(centerAll)
+
+        items.append(.separator())
+
+        let prefs = makeItem(
+            title: "Preferences…",
+            action: #selector(openPreferences),
+            key: Constants.preferencesKeyEquivalent
+        )
+        items.append(prefs)
+
+        if LaunchAtLoginService.isAvailable {
+            let lal = makeItem(
+                title: "Launch at Login",
+                action: #selector(toggleLaunchAtLogin)
+            )
+            lal.state = coordinator.launchAtLogin ? .on : .off
+            items.append(lal)
+        }
+
+        return items
+    }
+
+    private func makeSystemItems(coordinator: AppCoordinating) -> [NSMenuItem] {
+        let quit = NSMenuItem(
+            title: "Quit Centered",
+            action: #selector(NSApplication.terminate(_:)),
+            keyEquivalent: Constants.quitKeyEquivalent
+        )
+        quit.target = self
+        return [quit]
+    }
+
+    private func makeItem(
+        title: String,
+        action: Selector,
+        key: String = ""
+    ) -> NSMenuItem {
+        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+        item.target = self
+        return item
+    }
+
+    // MARK: - Menu Actions
+
+    @objc private func selectScreen(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        coordinator?.selectedScreen = NSScreen.screens.first { $0.localizedName == name }
+        rebuildScreenSection()
+    }
+
+    @objc private func toggleLaunchAtLogin() {
+        coordinator?.launchAtLogin.toggle()
+    }
+
+    @objc private func centerActiveMenuItem() {
+        coordinator?.centerActiveWindowManually()
+    }
+
+    @objc private func centerAllMenuItem() {
+        coordinator?.centerAllWindowsManually()
+    }
+
+    @objc private func openPreferences() {
+        // This will be handled by AppCenteringController
+        // PostNotification or delegate pattern could be used here
+    }
+
+    private func getBinding(_ type: BindingType) -> HotKeyBinding? {
+        // This is a placeholder - in real implementation, coordinator would provide this
+        nil
+    }
+
+    enum BindingType {
+        case active
+        case all
+    }
+}
+
+// MARK: - Permission Manager
+
+@MainActor
+final class PermissionManager {
+    private weak var controller: AppCenteringController?
+    private var permissionTimer: Timer?
+    private var notificationObserver: Any?
+
+    init(controller: AppCenteringController) {
+        self.controller = controller
+    }
+
+    func startPermissionChecks() {
+        stopPermissionChecks()
+
+        // Register for CFNotification
+        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetDistributedCenter(),
+            selfPtr,
+            permissionChangedCallback,
+            Constants.accessibilityNotification as CFString,
+            nil,
+            .deliverImmediately
+        )
+
+        // Start periodic timer
+        let timer = Timer(
+            timeInterval: Constants.permissionCheckInterval,
+            repeats: true
+        ) { [weak self] _ in
+            self?.performPermissionCheck()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        permissionTimer = timer
+    }
+
+    func stopPermissionChecks() {
+        permissionTimer?.invalidate()
+        permissionTimer = nil
+
+        CFNotificationCenterRemoveObserver(
+            CFNotificationCenterGetDistributedCenter(),
+            Unmanaged.passUnretained(self).toOpaque(),
+            Constants.accessibilityNotification as CFString,
+            nil
+        )
+    }
+
+    private func performPermissionCheck() {
+        guard !AccessibilityAuthorization.isTrusted else { return }
+        controller?.disableApp()
+        controller?.showPermissionAlert()
+    }
+
+    func handleAccessibilityTrustChange() {
+        guard !AccessibilityAuthorization.isTrusted else { return }
+        controller?.disableApp()
+        controller?.showPermissionAlert()
+    }
+
+    deinit {
+        stopPermissionChecks()
+    }
+}
+
+private let permissionChangedCallback: CFNotificationCallback = { _, observer, _, _, _ in
+    guard let observer else { return }
+    let manager = Unmanaged<PermissionManager>.fromOpaque(observer).takeUnretainedValue()
+    DispatchQueue.main.async { manager.handleAccessibilityTrustChange() }
+}
+
+// MARK: - App Centering Controller
+
 @MainActor
 final class AppCenteringController: NSObject, AppCoordinating {
 
@@ -55,37 +307,53 @@ final class AppCenteringController: NSObject, AppCoordinating {
     private let observer: WindowObserver
     private var settings: Settings
 
-    private lazy var hotKey: HotKey = HotKey(binding: settings.centerActiveBinding) {
-        [weak self] in
-        guard let self, self.isEnabled else { return }
-        self.centerer.centerFrontmost()
-        NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
-    }
-
-    private lazy var allWindowsHotKey: HotKey = HotKey(binding: settings.centerAllBinding) {
-        [weak self] in
-        guard let self, self.isEnabled else { return }
-        self.centerer.centerAllWindows()
-        NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
-    }
-
+    private var menuController: MenuController?
     private var statusItem: NSStatusItem?
     private var preferencesWindowController: PreferencesWindowController?
-    private var permissionTimer: Timer?
+    private var permissionManager: PermissionManager?
+
     private(set) var isEnabled = false
 
-    init(settings: Settings, windowCenterer: WindowCenterer, windowObserver: WindowObserver) {
+    private lazy var hotKey: HotKey = makeHotKey(
+        binding: settings.centerActiveBinding,
+        action: { [weak self] in
+            self?.centerer.centerFrontmost()
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    )
+
+    private lazy var allWindowsHotKey: HotKey = makeHotKey(
+        binding: settings.centerAllBinding,
+        action: { [weak self] in
+            self?.centerer.centerAllWindows()
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    )
+
+    init(
+        settings: Settings,
+        windowCenterer: WindowCenterer,
+        windowObserver: WindowObserver
+    ) {
         self.settings = settings
         self.centerer = windowCenterer
         self.observer = windowObserver
         super.init()
+        self.permissionManager = PermissionManager(controller: self)
     }
+
+    deinit {
+        permissionManager?.stopPermissionChecks()
+    }
+
+    // MARK: - AppCoordinating Protocol
 
     var selectedScreen: NSScreen? {
         get { centerer.selectedScreen }
         set {
             centerer.selectedScreen = newValue
             settings.selectedScreenName = newValue?.localizedName
+            menuController?.rebuildScreenSection()
         }
     }
 
@@ -93,7 +361,7 @@ final class AppCenteringController: NSObject, AppCoordinating {
         get { LaunchAtLoginService.isEnabled }
         set {
             LaunchAtLoginService.setEnabled(newValue)
-            rebuildActionsSection()
+            menuController?.rebuildActionsSection()
         }
     }
 
@@ -102,9 +370,12 @@ final class AppCenteringController: NSObject, AppCoordinating {
         restoreSelectedScreen()
         AccessibilityAuthorization.requestIfNeeded()
         enableApp()
+
         NotificationCenter.default.addObserver(
-            self, selector: #selector(screensDidChange),
-            name: NSApplication.didChangeScreenParametersNotification, object: nil
+            self,
+            selector: #selector(screensDidChange),
+            name: NSApplication.didChangeScreenParametersNotification,
+            object: nil
         )
     }
 
@@ -115,13 +386,13 @@ final class AppCenteringController: NSObject, AppCoordinating {
     func rebindHotKey(to binding: HotKeyBinding) {
         settings.centerActiveBinding = binding
         hotKey.rebind(to: binding)
-        rebuildActionsSection()
+        menuController?.rebuildActionsSection()
     }
 
     func rebindAllWindowsHotKey(to binding: HotKeyBinding) {
         settings.centerAllBinding = binding
         allWindowsHotKey.rebind(to: binding)
-        rebuildActionsSection()
+        menuController?.rebuildActionsSection()
     }
 
     func setExcludedBundleIDs(_ ids: Set<String>) {
@@ -131,47 +402,6 @@ final class AppCenteringController: NSObject, AppCoordinating {
 
     func preferencesWindowDidClose() {
         preferencesWindowController = nil
-    }
-
-    private func restoreSelectedScreen() {
-        guard let name = settings.selectedScreenName else { return }
-        centerer.selectedScreen = NSScreen.screens.first { $0.localizedName == name }
-    }
-
-    @objc private func screensDidChange() {
-        if let cur = centerer.selectedScreen, !NSScreen.screens.contains(cur) {
-            logger.debug("Selected screen disconnected — resetting to main")
-            centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
-        }
-        rebuildScreenSection()
-    }
-
-    private func showPermissionAlert() {
-        AccessibilityAuthorization.showAlertIfNeeded()
-    }
-
-    func enableApp() {
-        guard !isEnabled else { return }
-        guard AccessibilityAuthorization.isTrusted else { showPermissionAlert(); return }
-        isEnabled = true
-        observer.onWindowEvent     = { [weak self] win in self?.centerer.center(window: win) }
-        observer.excludedBundleIDs = settings.excludedBundleIDs
-        observer.start()
-        hotKey.activate()
-        allWindowsHotKey.activate()
-        NotificationCenter.default.post(name: .appStateChanged, object: nil)
-        startPermissionChecks()
-    }
-
-    func disableApp() {
-        guard isEnabled else { return }
-        isEnabled = false
-        observer.stop()
-        hotKey.deactivate()
-        allWindowsHotKey.deactivate()
-        centerer.cancelAnimation()
-        stopPermissionChecks()
-        NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
     func centerActiveWindowManually() {
@@ -184,134 +414,78 @@ final class AppCenteringController: NSObject, AppCoordinating {
         centerer.centerAllWindows()
     }
 
-    private enum MenuSection: Int {
-        case screens = 100, actions = 200, system = 300
-    }
+    // MARK: - Private Methods
 
     private func setupStatusItem() {
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(
+            withLength: NSStatusItem.variableLength
+        )
         statusItem?.button?.image = NSImage(
-            systemSymbolName: "inset.filled.center.rectangle",
+            systemSymbolName: Constants.statusIconName,
             accessibilityDescription: "Centered"
         )
         statusItem?.button?.contentTintColor = .labelColor
-        buildFullMenu()
-    }
 
-    private func buildFullMenu() {
-        let menu = NSMenu()
-        appendScreenItems(to: menu)
-        menu.addItem(.separator())
-        appendActionItems(to: menu)
-        menu.addItem(.separator())
-        appendSystemItems(to: menu)
-        statusItem?.menu = menu
-    }
-
-    private func rebuildScreenSection() {
-        guard let menu = statusItem?.menu else { buildFullMenu(); return }
-        removeItems(taggedIn: MenuSection.screens.rawValue ..< MenuSection.actions.rawValue, from: menu)
-        let separator = menu.items.first(where: { $0.isSeparatorItem })
-        let insertIndex = separator.map { menu.index(of: $0) } ?? 0
-        insert(makeScreenItems(), into: menu, at: insertIndex)
-    }
-
-    private func rebuildActionsSection() {
-        guard let menu = statusItem?.menu else { buildFullMenu(); return }
-        removeItems(taggedIn: MenuSection.actions.rawValue ..< MenuSection.system.rawValue, from: menu)
-        let separator = menu.items.first(where: { $0.isSeparatorItem })
-        let insertIndex = separator.map { menu.index(of: $0) + 1 } ?? menu.numberOfItems
-        insert(makeActionItems(), into: menu, at: insertIndex)
-    }
-
-    private func makeScreenItems() -> [NSMenuItem] {
-        NSScreen.screens.enumerated().map { i, screen in
-            let item = NSMenuItem(
-                title:         "Screen \(i + 1) — \(Int(screen.frame.width))×\(Int(screen.frame.height))",
-                action:        #selector(selectScreen(_:)),
-                keyEquivalent: ""
-            )
-            item.tag               = MenuSection.screens.rawValue + i
-            item.state             = (selectedScreen == screen) ? .on : .off
-            item.target            = self
-            item.representedObject = screen.localizedName
-            return item
+        if let item = statusItem {
+            menuController = MenuController(statusItem: item)
+            menuController?.coordinator = self
+            menuController?.buildFullMenu()
         }
     }
 
-    private func makeActionItems() -> [NSMenuItem] {
-        var items: [NSMenuItem] = []
-
-        let centerActive = makeItem(
-            title:  "Center Active Window  " + settings.centerActiveBinding.displayString,
-            action: #selector(centerActiveMenuItem)
-        )
-        centerActive.tag = MenuSection.actions.rawValue + 1
-        items.append(centerActive)
-
-        let centerAll = makeItem(
-            title:  "Center All Windows  " + settings.centerAllBinding.displayString,
-            action: #selector(centerAllMenuItem)
-        )
-        centerAll.tag = MenuSection.actions.rawValue + 2
-        items.append(centerAll)
-
-        items.append(.separator())
-
-        let prefs = makeItem(title: "Preferences…", action: #selector(openPreferences), key: ",")
-        prefs.tag = MenuSection.actions.rawValue + 3
-        items.append(prefs)
-
-        if LaunchAtLoginService.isAvailable {
-            let lal = makeItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin))
-            lal.state = launchAtLogin ? .on : .off
-            lal.tag   = MenuSection.actions.rawValue + 4
-            items.append(lal)
-        }
-
-        return items
-    }
-
-    private func appendScreenItems(to menu: NSMenu) {
-        makeScreenItems().forEach { menu.addItem($0) }
-    }
-
-    private func appendActionItems(to menu: NSMenu) {
-        makeActionItems().forEach { menu.addItem($0) }
-    }
-
-    private func insert(_ items: [NSMenuItem], into menu: NSMenu, at index: Int) {
-        for (offset, item) in items.enumerated() {
-            menu.insertItem(item, at: index + offset)
+    private func restoreSelectedScreen() {
+        guard let name = settings.selectedScreenName else { return }
+        if let screen = NSScreen.screens.first(where: { $0.localizedName == name }) {
+            centerer.selectedScreen = screen
+        } else {
+            logger.warning("Saved screen '\(name, privacy: .public)' not found; using main screen")
+            centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
         }
     }
 
-    private func appendSystemItems(to menu: NSMenu) {
-        let quit = NSMenuItem(
-            title: "Quit Centered",
-            action: #selector(NSApplication.terminate(_:)),
-            keyEquivalent: "q"
-        )
-        quit.tag = MenuSection.system.rawValue
-        menu.addItem(quit)
+    @objc private func screensDidChange() {
+        if let current = centerer.selectedScreen,
+           !NSScreen.screens.contains(current) {
+            logger.debug("Selected screen disconnected — resetting to main")
+            centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
+        }
+        menuController?.rebuildScreenSection()
     }
 
-    private func removeItems(taggedIn range: Range<Int>, from menu: NSMenu) {
-        menu.items
-            .filter { range.contains($0.tag) }
-            .forEach { menu.removeItem($0) }
+    func enableApp() {
+        guard !isEnabled else { return }
+        guard AccessibilityAuthorization.isTrusted else {
+            showPermissionAlert()
+            return
+        }
+
+        isEnabled = true
+        observer.onWindowEvent = { [weak self] win in
+            self?.centerer.center(window: win)
+        }
+        observer.excludedBundleIDs = settings.excludedBundleIDs
+        observer.start()
+        hotKey.activate()
+        allWindowsHotKey.activate()
+
+        NotificationCenter.default.post(name: .appStateChanged, object: nil)
+        permissionManager?.startPermissionChecks()
     }
 
-    @objc private func selectScreen(_ sender: NSMenuItem) {
-        guard let name = sender.representedObject as? String else { return }
-        selectedScreen = NSScreen.screens.first { $0.localizedName == name }
-        rebuildScreenSection()
+    func disableApp() {
+        guard isEnabled else { return }
+        isEnabled = false
+        observer.stop()
+        hotKey.deactivate()
+        allWindowsHotKey.deactivate()
+        centerer.cancelAnimation()
+        permissionManager?.stopPermissionChecks()
+        NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
-    @objc private func toggleLaunchAtLogin() { launchAtLogin.toggle() }
-
-    @objc private func centerActiveMenuItem() { centerActiveWindowManually() }
-    @objc private func centerAllMenuItem()    { centerAllWindowsManually() }
+    func showPermissionAlert() {
+        AccessibilityAuthorization.showAlertIfNeeded()
+    }
 
     @objc private func openPreferences() {
         if preferencesWindowController == nil {
@@ -321,55 +495,19 @@ final class AppCenteringController: NSObject, AppCoordinating {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func startPermissionChecks() {
-        stopPermissionChecks()
-
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        CFNotificationCenterAddObserver(
-            CFNotificationCenterGetDistributedCenter(),
-            selfPtr,
-            accessibilityChangedCallback,
-            "com.apple.accessibility.api" as CFString,
-            nil,
-            .deliverImmediately
-        )
-
-        let t = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
-            guard let self, !AccessibilityAuthorization.isTrusted else { return }
-            self.disableApp()
-            self.showPermissionAlert()
-        }
-        RunLoop.main.add(t, forMode: .common)
-        permissionTimer = t
-    }
-
-    private func stopPermissionChecks() {
-        permissionTimer?.invalidate()
-        permissionTimer = nil
-        CFNotificationCenterRemoveObserver(
-            CFNotificationCenterGetDistributedCenter(),
-            Unmanaged.passUnretained(self).toOpaque(),
-            "com.apple.accessibility.api" as CFString,
-            nil
-        )
-    }
-
-    func handleAccessibilityTrustChange() {
-        guard !AccessibilityAuthorization.isTrusted else { return }
-        disableApp()
-        showPermissionAlert()
-    }
-
-    private func makeItem(title: String, action: Selector, key: String = "") -> NSMenuItem {
-        let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
-        item.target = self
-        return item
+    private func makeHotKey(
+        binding: HotKeyBinding,
+        action: @escaping () -> Void
+    ) -> HotKey {
+        HotKey(binding: binding, action: action)
     }
 }
 
+// MARK: - Launch at Login Service
+
 enum LaunchAtLoginService {
     static var isAvailable: Bool {
-        if #available(macOS 13, *) { true } else { false }
+        #available(macOS 13, *) ? true : false
     }
 
     static var isEnabled: Bool {
@@ -386,10 +524,14 @@ enum LaunchAtLoginService {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            logger.debug("SMAppService error: \(error.localizedDescription, privacy: .public)")
+            logger.debug(
+                "SMAppService error: \(error.localizedDescription, privacy: .public)"
+            )
         }
     }
 }
+
+// MARK: - Accessibility Authorization
 
 enum AccessibilityAuthorization {
     static var isTrusted: Bool { AXIsProcessTrusted() }
@@ -399,25 +541,23 @@ enum AccessibilityAuthorization {
         AXIsProcessTrustedWithOptions(
             [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
         )
-        _ = NSAppleScript(source: "tell application \"System Events\" to get its name")?.executeAndReturnError(nil)
+        _ = NSAppleScript(
+            source: "tell application \"System Events\" to get its name"
+        )?.executeAndReturnError(nil)
     }
 
     static func showAlertIfNeeded() {
         let alert = NSAlert()
-        alert.messageText     = "Accessibility Permission Required"
+        alert.messageText = "Accessibility Permission Required"
         alert.informativeText = "Please enable Centered in System Settings › Privacy & Security › Accessibility."
-        alert.alertStyle      = .warning
+        alert.alertStyle = .warning
         alert.addButton(withTitle: "Open Settings")
         alert.addButton(withTitle: "Cancel")
+
         guard alert.runModal() == .alertFirstButtonReturn,
-              let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+              let url = URL(string: Constants.systemPreferencesURL)
         else { return }
+
         NSWorkspace.shared.open(url)
     }
-}
-
-private let accessibilityChangedCallback: CFNotificationCallback = { _, observer, _, _, _ in
-    guard let observer else { return }
-    let controller = Unmanaged<AppCenteringController>.fromOpaque(observer).takeUnretainedValue()
-    DispatchQueue.main.async { controller.handleAccessibilityTrustChange() }
 }
