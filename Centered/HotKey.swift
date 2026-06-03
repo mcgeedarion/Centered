@@ -62,7 +62,9 @@ struct HotKeyBinding: Equatable {
     }
 }
 
+// MARK: - Key Display Table (Improvement #3: Expanded key code support)
 private let kKeyDisplayTable = Dictionary(uniqueKeysWithValues: [
+    // Letters
     (kVK_ANSI_A, "A"), (kVK_ANSI_B, "B"), (kVK_ANSI_C, "C"), (kVK_ANSI_D, "D"),
     (kVK_ANSI_E, "E"), (kVK_ANSI_F, "F"), (kVK_ANSI_G, "G"), (kVK_ANSI_H, "H"),
     (kVK_ANSI_I, "I"), (kVK_ANSI_J, "J"), (kVK_ANSI_K, "K"), (kVK_ANSI_L, "L"),
@@ -70,14 +72,24 @@ private let kKeyDisplayTable = Dictionary(uniqueKeysWithValues: [
     (kVK_ANSI_Q, "Q"), (kVK_ANSI_R, "R"), (kVK_ANSI_S, "S"), (kVK_ANSI_T, "T"),
     (kVK_ANSI_U, "U"), (kVK_ANSI_V, "V"), (kVK_ANSI_W, "W"), (kVK_ANSI_X, "X"),
     (kVK_ANSI_Y, "Y"), (kVK_ANSI_Z, "Z"),
+    // Numbers
     (kVK_ANSI_0, "0"), (kVK_ANSI_1, "1"), (kVK_ANSI_2, "2"), (kVK_ANSI_3, "3"),
     (kVK_ANSI_4, "4"), (kVK_ANSI_5, "5"), (kVK_ANSI_6, "6"), (kVK_ANSI_7, "7"),
     (kVK_ANSI_8, "8"), (kVK_ANSI_9, "9"),
+    // Special keys
     (kVK_Space, "Space"), (kVK_Return, "\u{21A9}"), (kVK_Tab, "\u{21E5}"),
     (kVK_Delete, "\u{232B}"),
+    // Function keys
     (kVK_F1, "F1"), (kVK_F2, "F2"), (kVK_F3, "F3"), (kVK_F4, "F4"),
     (kVK_F5, "F5"), (kVK_F6, "F6"), (kVK_F7, "F7"), (kVK_F8, "F8"),
     (kVK_F9, "F9"), (kVK_F10, "F10"), (kVK_F11, "F11"), (kVK_F12, "F12"),
+    // Arrow keys
+    (kVK_UpArrow, "↑"), (kVK_DownArrow, "↓"),
+    (kVK_LeftArrow, "←"), (kVK_RightArrow, "→"),
+    // Navigation keys
+    (kVK_Home, "Home"), (kVK_End, "End"),
+    (kVK_PageUp, "Page Up"), (kVK_PageDown, "Page Down"),
+    (kVK_Escape, "Esc"),
 ].map { (UInt16($0.0), $0.1) })
 
 private func keyCodeDisplayString(_ keyCode: UInt16) -> String {
@@ -90,6 +102,25 @@ private func nextHotKeyID() -> EventHotKeyID {
     return EventHotKeyID(signature: 0x43656E74 /* 'Cent' */, id: _nextHotKeyID)
 }
 
+// MARK: - HotKey Errors (Improvement #5: Error handling)
+enum HotKeyError: LocalizedError {
+    case failedToInstallHandler
+    case failedToRegisterHotKey
+    case failedToUnregisterHotKey
+
+    var errorDescription: String? {
+        switch self {
+        case .failedToInstallHandler:
+            return "Failed to install Carbon event handler for hot key"
+        case .failedToRegisterHotKey:
+            return "Failed to register hot key with system"
+        case .failedToUnregisterHotKey:
+            return "Failed to unregister hot key with system"
+        }
+    }
+}
+
+// MARK: - HotKey Class
 @MainActor
 final class HotKey {
 
@@ -107,13 +138,24 @@ final class HotKey {
         self.hotKeyID       = nextHotKeyID()
     }
 
-    func activate() {
+    /// Activates the hot key by installing the Carbon event handler and registering the key.
+    /// - Throws: `HotKeyError` if installation or registration fails.
+    func activate() throws {
         guard !isActive else { return }
-        isActive = true
-        installCarbonHandler()
-        registerHotKey()
+
+        do {
+            try installCarbonHandler()
+            try registerHotKey()
+            isActive = true  // Improvement #4: State change only after both succeed
+        } catch {
+            // Rollback on failure
+            removeCarbonHandler()
+            unregisterHotKey()
+            throw error
+        }
     }
 
+    /// Deactivates the hot key by unregistering it and removing the Carbon event handler.
     func deactivate() {
         guard isActive else { return }
         isActive = false
@@ -121,34 +163,66 @@ final class HotKey {
         removeCarbonHandler()
     }
 
-    func rebind(to newBinding: HotKeyBinding) {
+    /// Rebinds the hot key to a new binding.
+    /// - Parameter newBinding: The new `HotKeyBinding` to use.
+    /// - Throws: `HotKeyError` if re-registration fails during rebind.
+    func rebind(to newBinding: HotKeyBinding) throws {
         guard binding != newBinding else { return }
         let wasActive = isActive
-        if wasActive { deactivate() }
+
+        if wasActive {
+            deactivate()
+        }
+
         binding  = newBinding
-        hotKeyID = nextHotKeyID()   // fresh ID avoids stale matches
-        if wasActive { activate() }
+        hotKeyID = nextHotKeyID()  // Fresh ID avoids stale matches
+
+        if wasActive {
+            do {
+                try activate()
+            } catch {
+                // If reactivation fails, remain deactivated
+                assertionFailure("Failed to reactivate hot key after rebind: \(error)")
+                throw error
+            }
+        }
     }
 
-    /// Cleanup must happen via explicit deactivate() before the last reference
-    /// is dropped. nonisolated deinit intentionally does not touch stored properties.
-    nonisolated deinit {}
+    /// Cleanup must happen via explicit deactivate() before the last reference is dropped.
+    /// Improvement #2: Added assertion to enforce deactivation discipline.
+    deinit {
+        if isActive {
+            assertionFailure(
+                "HotKey must be deactivated via deactivate() before deallocation. "
+                + "Current binding: \(binding)"
+            )
+        }
+    }
 
-    private func installCarbonHandler() {
+    // MARK: - Private Methods
+
+    private func installCarbonHandler() throws {
         guard handlerRef == nil else { return }
+
         var eventType = EventTypeSpec(
             eventClass: OSType(kEventClassKeyboard),
             eventKind:  OSType(kEventHotKeyPressed)
         )
-        // Unretained: the handler only fires while hotKeyRef is registered and self is alive.
+
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        InstallEventHandler(
+        let status = InstallEventHandler(
             GetApplicationEventTarget(),
             carbonHotKeyHandler,
             1, &eventType,
             selfPtr,
             &handlerRef
         )
+
+        // Improvement #5: Check for errors from Carbon API
+        guard status == noErr else {
+            handlerRef = nil
+            throw HotKeyError.failedToInstallHandler
+        }
     }
 
     private func removeCarbonHandler() {
@@ -158,9 +232,10 @@ final class HotKey {
         }
     }
 
-    private func registerHotKey() {
+    private func registerHotKey() throws {
         guard hotKeyRef == nil else { return }
-        RegisterEventHotKey(
+
+        let status = RegisterEventHotKey(
             UInt32(binding.keyCode),
             binding.carbonModifiers,
             hotKeyID,
@@ -168,16 +243,29 @@ final class HotKey {
             0,
             &hotKeyRef
         )
+
+        // Improvement #5: Check for errors from Carbon API
+        guard status == noErr else {
+            hotKeyRef = nil
+            throw HotKeyError.failedToRegisterHotKey
+        }
     }
 
     private func unregisterHotKey() {
         if let ref = hotKeyRef {
-            UnregisterEventHotKey(ref)
+            let status = UnregisterEventHotKey(ref)
+            // Log error but don't throw in cleanup path
+            if status != noErr {
+                print("Warning: UnregisterEventHotKey failed with status \(status)")
+            }
             hotKeyRef = nil
         }
     }
 
+    // Improvement #1: Added safety check for active state
     func handleCarbonEvent(_ event: EventRef) {
+        guard isActive else { return }
+
         var firedID = EventHotKeyID()
         GetEventParameter(
             event,
@@ -188,13 +276,16 @@ final class HotKey {
             nil,
             &firedID
         )
+
         guard firedID.signature == hotKeyID.signature,
               firedID.id        == hotKeyID.id
         else { return }
+
         keyDownHandler?()
     }
 }
 
+// MARK: - Carbon Event Handler
 private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
     guard let event, let userData else { return noErr }
     Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue().handleCarbonEvent(event)
