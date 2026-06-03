@@ -6,10 +6,10 @@ private let appleScriptLogger = Logger(
     category: "AppleScriptCenterer"
 )
 
-private let kBundleIDAllowedChars = CharacterSet(
+private let allowedBundleIDCharacters = CharacterSet(
     charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789.-"
 )
-private let kBundleIDMaxLength: Int = 255
+private let maxBundleIDLength: Int = 255
 
 private let appleScriptQueue = DispatchQueue(
     label: "com.centered.applescript",
@@ -18,12 +18,18 @@ private let appleScriptQueue = DispatchQueue(
 
 struct AppleScriptCenterer {
 
+    /// Validates that a bundle ID matches Apple's format requirements and security constraints.
+    /// - Parameter bundleID: The bundle identifier to validate
+    /// - Returns: `true` if the bundle ID is valid, `false` otherwise
     static func isValidBundleID(_ bundleID: String) -> Bool {
         !bundleID.isEmpty &&
-        bundleID.count <= kBundleIDMaxLength &&
-        bundleID.unicodeScalars.allSatisfy { kBundleIDAllowedChars.contains($0) }
+        bundleID.count <= maxBundleIDLength &&
+        bundleID.unicodeScalars.allSatisfy { allowedBundleIDCharacters.contains($0) }
     }
 
+    /// Centers the frontmost window of the given application using AppleScript.
+    /// Falls back to alternative positioning if animation is unsupported.
+    /// - Parameter app: The running application whose window should be centered
     static func centerFrontmostWindow(of app: NSRunningApplication) {
         guard let bundleID = app.bundleIdentifier else {
             appleScriptLogger.debug("AppleScript fallback skipped: no bundle ID for pid \(app.processIdentifier)")
@@ -32,21 +38,49 @@ struct AppleScriptCenterer {
         executeCentering(bundleID: bundleID, app: app)
     }
 
-    static func executeCentering(bundleID: String, app: NSRunningApplication) {
-        guard isValidBundleID(bundleID) else {
-            appleScriptLogger.debug("Rejected bundle ID with invalid format")
+    /// Executes the window centering operation after validating the bundle ID and process.
+    /// - Parameters:
+    ///   - bundleID: The validated bundle identifier
+    ///   - app: The running application to verify and center
+    private static func executeCentering(bundleID: String, app: NSRunningApplication) {
+        guard validateBundleID(bundleID, app: app) else {
             return
         }
+
+        let script = generateCenteringScript(bundleID: bundleID)
+        appleScriptQueue.async {
+            executeAppleScript(script, bundleID: bundleID)
+        }
+    }
+
+    /// Validates both the bundle ID format and that it matches the running process.
+    /// - Parameters:
+    ///   - bundleID: The bundle identifier to validate
+    ///   - app: The running application to verify against
+    /// - Returns: `true` if all validations pass, `false` otherwise
+    private static func validateBundleID(_ bundleID: String, app: NSRunningApplication) -> Bool {
+        guard isValidBundleID(bundleID) else {
+            appleScriptLogger.debug("Rejected bundle ID with invalid format")
+            return false
+        }
+
         guard NSRunningApplication
                 .runningApplications(withBundleIdentifier: bundleID)
                 .contains(where: { $0.processIdentifier == app.processIdentifier })
         else {
             appleScriptLogger.debug("Rejected bundle ID \(bundleID, privacy: .public): pid mismatch (possible spoof)")
-            return
+            return false
         }
 
-        let script = """
-        tell application id \"\(bundleID)\"
+        return true
+    }
+
+    /// Generates the AppleScript code for centering a window.
+    /// - Parameter bundleID: The bundle identifier of the target application
+    /// - Returns: The complete AppleScript as a string
+    private static func generateCenteringScript(bundleID: String) -> String {
+        """
+        tell application id "\(bundleID)"
             activate
             try
                 set win to front window
@@ -69,12 +103,22 @@ struct AppleScriptCenterer {
             end try
         end tell
         """
-        appleScriptQueue.async {
-            var error: NSDictionary?
-            _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
-            if let error {
-                appleScriptLogger.debug("AppleScript error (\(bundleID, privacy: .public)): \(error)")
-            }
+    }
+
+    /// Executes the provided AppleScript and logs any errors that occur.
+    /// - Parameters:
+    ///   - script: The AppleScript code to execute
+    ///   - bundleID: The bundle identifier for logging context
+    private static func executeAppleScript(_ script: String, bundleID: String) {
+        var error: NSDictionary?
+        _ = NSAppleScript(source: script)?.executeAndReturnError(&error)
+
+        if let error {
+            let errorCode = error[NSAppleScript.errorNumber] as? NSNumber ?? -1
+            let errorMessage = error[NSAppleScript.errorMessage] as? String ?? "Unknown error"
+            appleScriptLogger.debug(
+                "AppleScript error (\(bundleID, privacy: .public)): [\(errorCode)] \(errorMessage)"
+            )
         }
     }
 }
