@@ -6,9 +6,12 @@ private let logger = Logger(
     category: "WindowCenterer"
 )
 
-/// 16 steps × 12 ms ≈ 192 ms total, ~83 fps.
-private let kAnimationSteps = 16
-private let kAnimationInterval: TimeInterval = 0.012
+private struct AnimationConfig {
+    let steps: Int
+    let interval: TimeInterval
+    
+    static let `default` = AnimationConfig(steps: 16, interval: 0.012)
+}
 
 private struct AXWindow: Hashable {
     let element: AXUIElement
@@ -32,7 +35,7 @@ private struct AXWindow: Hashable {
     var isValid: Bool {
         var raw: AnyObject?
         let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw)
-        return err != .invalidUIElement && err != .cannotComplete
+        return err != .invalidUIElement && err != .cannotComplete && raw != nil
     }
 
     var isMinimized: Bool? { bool(for: kAXMinimizedAttribute) }
@@ -56,15 +59,17 @@ private struct AXWindow: Hashable {
     func setPosition(_ point: CGPoint) {
         var p = point
         if let val = AXValueCreate(.cgPoint, &p) {
-            AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, val)
+            let err = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, val)
+            if err != .success {
+                logger.warning("Failed to set window position: \(err)")
+            }
+        } else {
+            logger.warning("Failed to create CGPoint AXValue")
         }
     }
 
     private func bool(for attribute: String) -> Bool? {
-        var raw: AnyObject?
-        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success
-        else { return nil }
-        return raw as? Bool
+        getAttribute(attribute, as: Bool.self)
     }
 
     private func axValue(for attribute: String) -> AXValue? {
@@ -75,6 +80,14 @@ private struct AXWindow: Hashable {
               let axVal = value as? AXValue
         else { return nil }
         return axVal
+    }
+
+    private func getAttribute<T>(_ attribute: String, as type: T.Type) -> T? {
+        var raw: AnyObject?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success else {
+            return nil
+        }
+        return raw as? T
     }
 }
 
@@ -90,6 +103,8 @@ final class WindowCenterer {
     // Debounce repeated events for the same window.
     private var debounceTokens: [AXWindow: DispatchWorkItem] = [:]
     private let debounceInterval: TimeInterval = 0.03
+    
+    private let animationConfig = AnimationConfig.default
 
     func center(window element: AXUIElement) {
         center(window: AXWindow(element))
@@ -148,18 +163,15 @@ final class WindowCenterer {
     }
 
     private func performCenter(window: AXWindow) {
-        guard !isCenteringElsewhere(window: window) else { return }
+        // Check and atomically update animation tokens to prevent race condition
+        if let token = animationTokens[window], !token.isCancelled {
+            return
+        }
+        
         if !centerViaAX(window: window),
            let app = NSWorkspace.shared.frontmostApplication {
             AppleScriptCenterer.centerFrontmostWindow(of: app)
         }
-    }
-
-    private func isCenteringElsewhere(window: AXWindow) -> Bool {
-        if let token = animationTokens[window], !token.isCancelled {
-            return true
-        }
-        return false
     }
 
     nonisolated static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
@@ -212,19 +224,19 @@ final class WindowCenterer {
         }
 
         func step(_ i: Int) {
-            guard i <= kAnimationSteps,
+            guard i <= animationConfig.steps,
                   !token.isCancelled,
                   window.isValid
             else { finish(); return }
 
             let pos = WindowCenterer.animationPosition(
-                from: start, to: target, step: i, totalSteps: kAnimationSteps
+                from: start, to: target, step: i, totalSteps: animationConfig.steps
             )
             window.setPosition(pos)
 
-            if i < kAnimationSteps {
-                DispatchQueue.main.asyncAfter(deadline: .now() + kAnimationInterval) {
-                    step(i + 1)
+            if i < animationConfig.steps {
+                DispatchQueue.main.asyncAfter(deadline: .now() + animationConfig.interval) { [weak self] in
+                    self?.step(i + 1)
                 }
             } else {
                 finish()
