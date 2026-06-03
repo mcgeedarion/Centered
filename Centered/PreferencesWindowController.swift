@@ -1,5 +1,4 @@
 import Cocoa
-import Carbon.HIToolbox
 
 protocol PreferencesHost: AnyObject {
     var settings: Settings { get }
@@ -27,7 +26,7 @@ final class KeyRecorderField: NSTextField {
         isBordered      = true
         backgroundColor = .controlBackgroundColor
         alignment       = .center
-        font            = .monospacedSystemFont(ofSize: 13, weight: .medium)
+        font            = UIConstants.keyRecorderFont
         translatesAutoresizingMaskIntoConstraints = false
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
@@ -43,10 +42,7 @@ final class KeyRecorderField: NSTextField {
     override func keyDown(with event: NSEvent) {
         guard isRecording else { super.keyDown(with: event); return }
         let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        let hasRequiredModifier = mods.contains(.command)
-                               || mods.contains(.option)
-                               || mods.contains(.control)
-        guard hasRequiredModifier, event.keyCode != UInt16(kVK_Escape) else {
+        guard hasRequiredModifier(mods), !isEscapeKey(event.keyCode) else {
             cancelRecording()
             return
         }
@@ -57,6 +53,14 @@ final class KeyRecorderField: NSTextField {
         guard isRecording else { return }
         let preview = event.modifierFlags.hotKeyDisplayString
         stringValue = preview.isEmpty ? "Press shortcut…" : preview + "_"
+    }
+
+    private func hasRequiredModifier(_ flags: NSEvent.ModifierFlags) -> Bool {
+        flags.contains(.command) || flags.contains(.option) || flags.contains(.control)
+    }
+
+    private func isEscapeKey(_ keyCode: UInt16) -> Bool {
+        keyCode == 53 // kVK_Escape
     }
 
     private func cancelRecording() {
@@ -90,18 +94,39 @@ final class KeyRecorderField: NSTextField {
 @MainActor
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
-    private weak var host: PreferencesHost?
-    private var activeKeyRecorder:  KeyRecorderField!
-    private var allKeyRecorder:     KeyRecorderField!
-    private var tableView:          NSTableView!
-    private var removeButton:       NSButton!
-    private var excludedIDs:        [String] = []
-    private var openPanel:          NSOpenPanel?
+    // MARK: - UI Constants
+    private enum UIConstants {
+        static let margins: CGFloat = 20
+        static let labelWidth: CGFloat = 180
+        static let spacing: CGFloat = 10
+        static let smallSpacing: CGFloat = 6
+        static let tinySpacing: CGFloat = 4
+        static let keyRecorderHeight: CGFloat = 24
+        static let tableViewHeight: CGFloat = 110
+        static let keyRecorderFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+        static let sectionFontSize: CGFloat = 13
+        static let hintFontSize: CGFloat = 11
+        static let windowWidth: CGFloat = 460
+        static let windowHeight: CGFloat = 440
+        static let bottomPadding: CGFloat = 16
+    }
 
+    // MARK: - Properties
+    private weak var host: PreferencesHost?
+    private var openPanel: NSOpenPanel?
+    private var excludedIDs: Set<String> = []
+
+    // Lazy UI components
+    private lazy var activeKeyRecorder: KeyRecorderField = makeActiveKeyRecorder()
+    private lazy var allKeyRecorder: KeyRecorderField = makeAllKeyRecorder()
+    private lazy var tableView: NSTableView = makeTableView()
+    private lazy var removeButton: NSButton = makeRemoveButton()
+
+    // MARK: - Initialization
     init(host: PreferencesHost) {
         self.host = host
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 440),
+            contentRect: NSRect(x: 0, y: 0, width: UIConstants.windowWidth, height: UIConstants.windowHeight),
             styleMask:   [.titled, .closable],
             backing:     .buffered,
             defer:       false
@@ -114,6 +139,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
 
+    // MARK: - Window Delegate
     func windowDidBecomeKey(_ notification: Notification) {
         guard let settings = host?.settings else { return }
         let activeBinding = settings.centerActiveBinding
@@ -122,7 +148,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         allKeyRecorder.binding            = allBinding
         activeKeyRecorder.conflictBinding = allBinding
         allKeyRecorder.conflictBinding    = activeBinding
-        excludedIDs = Array(settings.excludedBundleIDs).sorted()
+        excludedIDs = settings.excludedBundleIDs
         tableView.reloadData()
     }
 
@@ -132,44 +158,25 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         host?.preferencesWindowDidClose()
     }
 
+    // MARK: - UI Building
     private func buildUI() {
         guard let cv = window?.contentView else { return }
 
         let hotkeysHeader = sectionLabel("Hotkeys")
         let activeLabel   = fieldLabel("Center Active Window")
         let allLabel      = fieldLabel("Center All Windows")
-
-        let activeBinding = host?.settings.centerActiveBinding ?? .centerActive
-        let allBinding    = host?.settings.centerAllBinding ?? .centerAll
-
-        activeKeyRecorder = KeyRecorderField(binding: activeBinding)
-        activeKeyRecorder.conflictBinding = allBinding
-        activeKeyRecorder.onBindingChanged = { [weak self] b in
-            self?.allKeyRecorder.conflictBinding = b
-            self?.host?.rebindHotKey(to: b)
-        }
-
-        allKeyRecorder = KeyRecorderField(binding: allBinding)
-        allKeyRecorder.conflictBinding = activeBinding
-        allKeyRecorder.onBindingChanged = { [weak self] b in
-            self?.activeKeyRecorder.conflictBinding = b
-            self?.host?.rebindAllWindowsHotKey(to: b)
-        }
-
         let hotkeysHint = hintLabel("Click a field, then press your desired shortcut. Escape cancels.")
 
         let exclusionsHeader = sectionLabel("Auto-Center Exclusions")
         let exclusionsHint   = hintLabel("Apps listed here will never be auto-centered when focused.")
-        excludedIDs          = Array(host?.settings.excludedBundleIDs ?? []).sorted()
+        excludedIDs          = host?.settings.excludedBundleIDs ?? []
 
-        let scrollView = buildTableView()
+        let scrollView = NSScrollView()
+        scrollView.hasVerticalScroller = true
+        scrollView.borderType          = .bezelBorder
+        scrollView.documentView        = tableView
 
-        let addButton = NSButton(title: "Add App…", target: self, action: #selector(addExclusion))
-        addButton.bezelStyle = .rounded
-
-        removeButton = NSButton(title: "Remove", target: self, action: #selector(removeExclusion))
-        removeButton.bezelStyle = .rounded
-        removeButton.isEnabled  = false
+        let addButton = makeButton(title: "Add App…", action: #selector(addExclusion))
 
         let version    = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
         let aboutLabel = hintLabel("Centered v\(version) — personal use build")
@@ -199,7 +206,28 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    private func buildTableView() -> NSScrollView {
+    // MARK: - UI Component Factories
+    private func makeActiveKeyRecorder() -> KeyRecorderField {
+        let activeBinding = host?.settings.centerActiveBinding ?? .centerActive
+        let recorder = KeyRecorderField(binding: activeBinding)
+        recorder.onBindingChanged = { [weak self] b in
+            self?.allKeyRecorder.conflictBinding = b
+            self?.host?.rebindHotKey(to: b)
+        }
+        return recorder
+    }
+
+    private func makeAllKeyRecorder() -> KeyRecorderField {
+        let allBinding = host?.settings.centerAllBinding ?? .centerAll
+        let recorder = KeyRecorderField(binding: allBinding)
+        recorder.onBindingChanged = { [weak self] b in
+            self?.activeKeyRecorder.conflictBinding = b
+            self?.host?.rebindAllWindowsHotKey(to: b)
+        }
+        return recorder
+    }
+
+    private func makeTableView() -> NSTableView {
         let tv = NSTableView()
         tv.dataSource = self
         tv.delegate   = self
@@ -208,15 +236,22 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         let col = NSTableColumn(identifier: .init("bundleID"))
         col.title = "Bundle ID"
         tv.addTableColumn(col)
-        tableView = tv
-
-        let sv = NSScrollView()
-        sv.hasVerticalScroller = true
-        sv.borderType          = .bezelBorder
-        sv.documentView        = tv
-        return sv
+        return tv
     }
 
+    private func makeRemoveButton() -> NSButton {
+        let button = makeButton(title: "Remove", action: #selector(removeExclusion))
+        button.isEnabled = false
+        return button
+    }
+
+    private func makeButton(title: String, action: Selector) -> NSButton {
+        let button = NSButton(title: title, target: self, action: action)
+        button.bezelStyle = .rounded
+        return button
+    }
+
+    // MARK: - Constraints
     private func applyConstraints(
         in cv:             NSView,
         hotkeysHeader:     NSView,
@@ -229,64 +264,95 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         addButton:         NSView,
         aboutLabel:        NSView
     ) {
-        let m:  CGFloat = 20
-        let lw: CGFloat = 180
-
-        NSLayoutConstraint.activate([
-            hotkeysHeader.topAnchor.constraint(equalTo: cv.topAnchor, constant: m),
-            hotkeysHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-
-            activeLabel.topAnchor.constraint(equalTo: hotkeysHeader.bottomAnchor, constant: 10),
-            activeLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-            activeLabel.widthAnchor.constraint(equalToConstant: lw),
-
-            activeKeyRecorder.centerYAnchor.constraint(equalTo: activeLabel.centerYAnchor),
-            activeKeyRecorder.leadingAnchor.constraint(equalTo: activeLabel.trailingAnchor, constant: 8),
-            activeKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -m),
-            activeKeyRecorder.heightAnchor.constraint(equalToConstant: 24),
-
-            allLabel.topAnchor.constraint(equalTo: activeLabel.bottomAnchor, constant: 10),
-            allLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-            allLabel.widthAnchor.constraint(equalToConstant: lw),
-
-            allKeyRecorder.centerYAnchor.constraint(equalTo: allLabel.centerYAnchor),
-            allKeyRecorder.leadingAnchor.constraint(equalTo: allLabel.trailingAnchor, constant: 8),
-            allKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -m),
-            allKeyRecorder.heightAnchor.constraint(equalToConstant: 24),
-
-            hotkeysHint.topAnchor.constraint(equalTo: allLabel.bottomAnchor, constant: 6),
-            hotkeysHint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-            hotkeysHint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -m),
-
-            exclusionsHeader.topAnchor.constraint(equalTo: hotkeysHint.bottomAnchor, constant: m),
-            exclusionsHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-
-            exclusionsHint.topAnchor.constraint(equalTo: exclusionsHeader.bottomAnchor, constant: 4),
-            exclusionsHint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-            exclusionsHint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -m),
-
-            scrollView.topAnchor.constraint(equalTo: exclusionsHint.bottomAnchor, constant: 8),
-            scrollView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-            scrollView.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -m),
-            scrollView.heightAnchor.constraint(equalToConstant: 110),
-
-            addButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: 8),
-            addButton.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: m),
-
-            removeButton.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
-            removeButton.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: 8),
-
-            aboutLabel.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
-            aboutLabel.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
-        ])
+        var constraints: [NSLayoutConstraint] = []
+        constraints.append(contentsOf: hotkeysConstraints(
+            cv: cv,
+            header: hotkeysHeader,
+            activeLabel: activeLabel,
+            allLabel: allLabel,
+            hint: hotkeysHint
+        ))
+        constraints.append(contentsOf: exclusionsConstraints(
+            cv: cv,
+            header: exclusionsHeader,
+            hint: exclusionsHint,
+            scrollView: scrollView,
+            addButton: addButton,
+            aboutLabel: aboutLabel
+        ))
+        NSLayoutConstraint.activate(constraints)
     }
 
+    private func hotkeysConstraints(
+        cv: NSView,
+        header: NSView,
+        activeLabel: NSView,
+        allLabel: NSView,
+        hint: NSView
+    ) -> [NSLayoutConstraint] {
+        [
+            header.topAnchor.constraint(equalTo: cv.topAnchor, constant: UIConstants.margins),
+            header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+
+            activeLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: UIConstants.spacing),
+            activeLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            activeLabel.widthAnchor.constraint(equalToConstant: UIConstants.labelWidth),
+
+            activeKeyRecorder.centerYAnchor.constraint(equalTo: activeLabel.centerYAnchor),
+            activeKeyRecorder.leadingAnchor.constraint(equalTo: activeLabel.trailingAnchor, constant: UIConstants.tinySpacing * 2),
+            activeKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+            activeKeyRecorder.heightAnchor.constraint(equalToConstant: UIConstants.keyRecorderHeight),
+
+            allLabel.topAnchor.constraint(equalTo: activeLabel.bottomAnchor, constant: UIConstants.spacing),
+            allLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            allLabel.widthAnchor.constraint(equalToConstant: UIConstants.labelWidth),
+
+            allKeyRecorder.centerYAnchor.constraint(equalTo: allLabel.centerYAnchor),
+            allKeyRecorder.leadingAnchor.constraint(equalTo: allLabel.trailingAnchor, constant: UIConstants.tinySpacing * 2),
+            allKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+            allKeyRecorder.heightAnchor.constraint(equalToConstant: UIConstants.keyRecorderHeight),
+
+            hint.topAnchor.constraint(equalTo: allLabel.bottomAnchor, constant: UIConstants.smallSpacing),
+            hint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            hint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+        ]
+    }
+
+    private func exclusionsConstraints(
+        cv: NSView,
+        header: NSView,
+        hint: NSView,
+        scrollView: NSView,
+        addButton: NSView,
+        aboutLabel: NSView
+    ) -> [NSLayoutConstraint] {
+        [
+            header.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: UIConstants.margins),
+            header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+
+            hint.topAnchor.constraint(equalTo: header.bottomAnchor, constant: UIConstants.tinySpacing),
+            hint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            hint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+
+            scrollView.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: UIConstants.tinySpacing * 2),
+            scrollView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            scrollView.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+            scrollView.heightAnchor.constraint(equalToConstant: UIConstants.tableViewHeight),
+
+            addButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: UIConstants.tinySpacing * 2),
+            addButton.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+
+            removeButton.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
+            removeButton.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: UIConstants.tinySpacing * 2),
+
+            aboutLabel.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -UIConstants.bottomPadding),
+            aboutLabel.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
+        ]
+    }
+
+    // MARK: - Actions
     @objc private func addExclusion() {
-        let panel = NSOpenPanel()
-        panel.title                   = "Choose an Application"
-        panel.allowedContentTypes     = [.applicationBundle]
-        panel.allowsMultipleSelection = false
-        panel.directoryURL            = URL(fileURLWithPath: "/Applications")
+        let panel = configureOpenPanel()
         openPanel = panel
         panel.begin { [weak self] response in
             guard let self else { return }
@@ -299,29 +365,42 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func configureOpenPanel() -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.title                   = "Choose an Application"
+        panel.allowedContentTypes     = [.applicationBundle]
+        panel.allowsMultipleSelection = false
+        panel.directoryURL            = URL(fileURLWithPath: "/Applications")
+        return panel
+    }
+
     private func insertExclusion(_ id: String) {
         guard !excludedIDs.contains(id) else { return }
-        excludedIDs.append(id)
-        excludedIDs.sort()
-        tableView.reloadData()
-        saveExclusions()
+        excludedIDs.insert(id)
+        updateTableView()
     }
 
     @objc private func removeExclusion() {
         let row = tableView.selectedRow
         guard row >= 0, row < excludedIDs.count else { return }
-        excludedIDs.remove(at: row)
+        let sortedIDs = excludedIDs.sorted()
+        excludedIDs.remove(sortedIDs[row])
+        updateTableView()
+    }
+
+    private func updateTableView() {
         tableView.reloadData()
         saveExclusions()
     }
 
     private func saveExclusions() {
-        host?.setExcludedBundleIDs(Set(excludedIDs))
+        host?.setExcludedBundleIDs(excludedIDs)
     }
 
+    // MARK: - Label Factories
     private func sectionLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
-        l.font = .boldSystemFont(ofSize: 13)
+        l.font = .boldSystemFont(ofSize: UIConstants.sectionFontSize)
         return l
     }
 
@@ -331,15 +410,18 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     private func hintLabel(_ text: String) -> NSTextField {
         let l = NSTextField(wrappingLabelWithString: text)
-        l.font      = .systemFont(ofSize: 11)
+        l.font      = .systemFont(ofSize: UIConstants.hintFontSize)
         l.textColor = .secondaryLabelColor
         return l
     }
 }
 
+// MARK: - Table View Data Source & Delegate
 extension PreferencesWindowController: NSTableViewDataSource, NSTableViewDelegate {
 
-    func numberOfRows(in tableView: NSTableView) -> Int { excludedIDs.count }
+    func numberOfRows(in tableView: NSTableView) -> Int {
+        excludedIDs.count
+    }
 
     func tableView(_ tableView: NSTableView,
                    viewFor tableColumn: NSTableColumn?,
@@ -347,7 +429,8 @@ extension PreferencesWindowController: NSTableViewDataSource, NSTableViewDelegat
         let cellID = NSUserInterfaceItemIdentifier("BundleIDCell")
         let cell   = tableView.makeView(withIdentifier: cellID, owner: self)
                      as? NSTableCellView ?? makeCellView(id: cellID)
-        cell.textField?.stringValue = excludedIDs[row]
+        let sortedIDs = excludedIDs.sorted()
+        cell.textField?.stringValue = sortedIDs[row]
         return cell
     }
 
@@ -364,7 +447,7 @@ extension PreferencesWindowController: NSTableViewDataSource, NSTableViewDelegat
         cell.textField = tf
         NSLayoutConstraint.activate([
             tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 4),
+            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: UIConstants.tinySpacing),
             tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
         ])
         return cell
