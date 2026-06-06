@@ -1,5 +1,21 @@
 import Cocoa
 
+private enum PreferencesUIConstants {
+    static let margins: CGFloat = 20
+    static let labelWidth: CGFloat = 180
+    static let spacing: CGFloat = 10
+    static let smallSpacing: CGFloat = 6
+    static let tinySpacing: CGFloat = 4
+    static let keyRecorderHeight: CGFloat = 24
+    static let tableViewHeight: CGFloat = 110
+    static let keyRecorderFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
+    static let sectionFontSize: CGFloat = 13
+    static let hintFontSize: CGFloat = 11
+    static let windowWidth: CGFloat = 460
+    static let windowHeight: CGFloat = 440
+    static let bottomPadding: CGFloat = 16
+}
+
 protocol PreferencesHost: AnyObject {
     var settings: Settings { get }
     func rebindHotKey(to binding: HotKeyBinding)
@@ -26,7 +42,7 @@ final class KeyRecorderField: NSTextField {
         isBordered      = true
         backgroundColor = .controlBackgroundColor
         alignment       = .center
-        font            = UIConstants.keyRecorderFont
+        font            = PreferencesUIConstants.keyRecorderFont
         translatesAutoresizingMaskIntoConstraints = false
     }
     @available(*, unavailable) required init?(coder: NSCoder) { fatalError() }
@@ -94,23 +110,6 @@ final class KeyRecorderField: NSTextField {
 @MainActor
 final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
-    // MARK: - UI Constants
-    private enum UIConstants {
-        static let margins: CGFloat = 20
-        static let labelWidth: CGFloat = 180
-        static let spacing: CGFloat = 10
-        static let smallSpacing: CGFloat = 6
-        static let tinySpacing: CGFloat = 4
-        static let keyRecorderHeight: CGFloat = 24
-        static let tableViewHeight: CGFloat = 110
-        static let keyRecorderFont = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-        static let sectionFontSize: CGFloat = 13
-        static let hintFontSize: CGFloat = 11
-        static let windowWidth: CGFloat = 460
-        static let windowHeight: CGFloat = 440
-        static let bottomPadding: CGFloat = 16
-    }
-
     // MARK: - Properties
     private weak var host: PreferencesHost?
     private var openPanel: NSOpenPanel?
@@ -126,7 +125,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     init(host: PreferencesHost) {
         self.host = host
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: UIConstants.windowWidth, height: UIConstants.windowHeight),
+            contentRect: NSRect(x: 0, y: 0, width: PreferencesUIConstants.windowWidth, height: PreferencesUIConstants.windowHeight),
             styleMask:   [.titled, .closable],
             backing:     .buffered,
             defer:       false
@@ -291,30 +290,30 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         hint: NSView
     ) -> [NSLayoutConstraint] {
         [
-            header.topAnchor.constraint(equalTo: cv.topAnchor, constant: UIConstants.margins),
-            header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            header.topAnchor.constraint(equalTo: cv.topAnchor, constant: PreferencesUIConstants.margins),
+            header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
 
-            activeLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: UIConstants.spacing),
-            activeLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
-            activeLabel.widthAnchor.constraint(equalToConstant: UIConstants.labelWidth),
+            activeLabel.topAnchor.constraint(equalTo: header.bottomAnchor, constant: PreferencesUIConstants.spacing),
+            activeLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
+            activeLabel.widthAnchor.constraint(equalToConstant: PreferencesUIConstants.labelWidth),
 
             activeKeyRecorder.centerYAnchor.constraint(equalTo: activeLabel.centerYAnchor),
-            activeKeyRecorder.leadingAnchor.constraint(equalTo: activeLabel.trailingAnchor, constant: UIConstants.tinySpacing * 2),
-            activeKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
-            activeKeyRecorder.heightAnchor.constraint(equalToConstant: UIConstants.keyRecorderHeight),
+            activeKeyRecorder.leadingAnchor.constraint(equalTo: activeLabel.trailingAnchor, constant: PreferencesUIConstants.tinySpacing * 2),
+            activeKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -PreferencesUIConstants.margins),
+            activeKeyRecorder.heightAnchor.constraint(equalToConstant: PreferencesUIConstants.keyRecorderHeight),
 
-            allLabel.topAnchor.constraint(equalTo: activeLabel.bottomAnchor, constant: UIConstants.spacing),
-            allLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
-            allLabel.widthAnchor.constraint(equalToConstant: UIConstants.labelWidth),
+            allLabel.topAnchor.constraint(equalTo: activeLabel.bottomAnchor, constant: PreferencesUIConstants.spacing),
+            allLabel.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
+            allLabel.widthAnchor.constraint(equalToConstant: PreferencesUIConstants.labelWidth),
 
             allKeyRecorder.centerYAnchor.constraint(equalTo: allLabel.centerYAnchor),
-            allKeyRecorder.leadingAnchor.constraint(equalTo: allLabel.trailingAnchor, constant: UIConstants.tinySpacing * 2),
-            allKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
-            allKeyRecorder.heightAnchor.constraint(equalToConstant: UIConstants.keyRecorderHeight),
+            allKeyRecorder.leadingAnchor.constraint(equalTo: allLabel.trailingAnchor, constant: PreferencesUIConstants.tinySpacing * 2),
+            allKeyRecorder.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -PreferencesUIConstants.margins),
+            allKeyRecorder.heightAnchor.constraint(equalToConstant: PreferencesUIConstants.keyRecorderHeight),
 
-            hint.topAnchor.constraint(equalTo: allLabel.bottomAnchor, constant: UIConstants.smallSpacing),
-            hint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
-            hint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+            hint.topAnchor.constraint(equalTo: allLabel.bottomAnchor, constant: PreferencesUIConstants.smallSpacing),
+            hint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
+            hint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -PreferencesUIConstants.margins),
         ]
     }
 
@@ -327,25 +326,25 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         aboutLabel: NSView
     ) -> [NSLayoutConstraint] {
         [
-            header.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: UIConstants.margins),
-            header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            header.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: PreferencesUIConstants.margins),
+            header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
 
-            hint.topAnchor.constraint(equalTo: header.bottomAnchor, constant: UIConstants.tinySpacing),
-            hint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
-            hint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
+            hint.topAnchor.constraint(equalTo: header.bottomAnchor, constant: PreferencesUIConstants.tinySpacing),
+            hint.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
+            hint.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -PreferencesUIConstants.margins),
 
-            scrollView.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: UIConstants.tinySpacing * 2),
-            scrollView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
-            scrollView.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -UIConstants.margins),
-            scrollView.heightAnchor.constraint(equalToConstant: UIConstants.tableViewHeight),
+            scrollView.topAnchor.constraint(equalTo: hint.bottomAnchor, constant: PreferencesUIConstants.tinySpacing * 2),
+            scrollView.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
+            scrollView.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -PreferencesUIConstants.margins),
+            scrollView.heightAnchor.constraint(equalToConstant: PreferencesUIConstants.tableViewHeight),
 
-            addButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: UIConstants.tinySpacing * 2),
-            addButton.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: UIConstants.margins),
+            addButton.topAnchor.constraint(equalTo: scrollView.bottomAnchor, constant: PreferencesUIConstants.tinySpacing * 2),
+            addButton.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: PreferencesUIConstants.margins),
 
             removeButton.centerYAnchor.constraint(equalTo: addButton.centerYAnchor),
-            removeButton.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: UIConstants.tinySpacing * 2),
+            removeButton.leadingAnchor.constraint(equalTo: addButton.trailingAnchor, constant: PreferencesUIConstants.tinySpacing * 2),
 
-            aboutLabel.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -UIConstants.bottomPadding),
+            aboutLabel.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -PreferencesUIConstants.bottomPadding),
             aboutLabel.centerXAnchor.constraint(equalTo: cv.centerXAnchor),
         ]
     }
@@ -400,7 +399,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Label Factories
     private func sectionLabel(_ text: String) -> NSTextField {
         let l = NSTextField(labelWithString: text)
-        l.font = .boldSystemFont(ofSize: UIConstants.sectionFontSize)
+        l.font = .boldSystemFont(ofSize: PreferencesUIConstants.sectionFontSize)
         return l
     }
 
@@ -410,7 +409,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
 
     private func hintLabel(_ text: String) -> NSTextField {
         let l = NSTextField(wrappingLabelWithString: text)
-        l.font      = .systemFont(ofSize: UIConstants.hintFontSize)
+        l.font      = .systemFont(ofSize: PreferencesUIConstants.hintFontSize)
         l.textColor = .secondaryLabelColor
         return l
     }
@@ -447,7 +446,7 @@ extension PreferencesWindowController: NSTableViewDataSource, NSTableViewDelegat
         cell.textField = tf
         NSLayoutConstraint.activate([
             tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
-            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: UIConstants.tinySpacing),
+            tf.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: PreferencesUIConstants.tinySpacing),
             tf.trailingAnchor.constraint(equalTo: cell.trailingAnchor),
         ])
         return cell

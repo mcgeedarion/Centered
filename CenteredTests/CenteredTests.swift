@@ -244,3 +244,53 @@ struct HotKeyBindingPreferenceDecodingTests {
         #expect(decoded?.modifiers == .command)
     }
 }
+
+@Suite("WindowCenterer display selection")
+struct DisplaySelectionTests {
+
+    @Test func picksScreenWithLargestWindowOverlap() {
+        let screens = [
+            CGRect(x: 0, y: 0, width: 1000, height: 800),
+            CGRect(x: 1000, y: 0, width: 1000, height: 800),
+        ]
+        let window = CGRect(x: 900, y: 100, width: 300, height: 300)
+        #expect(WindowCenterer.bestScreenIndex(containing: window, screenRects: screens) == 1)
+    }
+
+    @Test func nearFullScreenWindowsAreSkipped() {
+        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+        #expect(WindowCenterer.isEffectivelyFullScreen(windowSize: CGSize(width: 1420, height: 890), in: screen))
+        #expect(!WindowCenterer.isEffectivelyFullScreen(windowSize: CGSize(width: 900, height: 700), in: screen))
+    }
+}
+
+@Suite("DefaultSettings persistence")
+struct DefaultSettingsPersistenceTests {
+
+    @Test func hotkeysUseDocumentedDefaults() {
+        let suite = UserDefaults(suiteName: "CenteredTests.hotkeysUseDocumentedDefaults")!
+        suite.removePersistentDomain(forName: "CenteredTests.hotkeysUseDocumentedDefaults")
+        var settings = DefaultSettings(defaults: suite)
+        settings.reset()
+
+        #expect(settings.centerActiveBinding == .centerActive)
+        #expect(settings.centerAllBinding == .centerAll)
+    }
+
+    @Test func behaviorSettingsPersist() {
+        let suiteName = "CenteredTests.behaviorSettingsPersist"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        var settings = DefaultSettings(defaults: suite)
+        settings.reset()
+
+        settings.isAutoCenteringPaused = true
+        settings.centersOnWindowScreen = false
+        settings.animationStyle = .instant
+
+        let reloaded = DefaultSettings(defaults: suite)
+        #expect(reloaded.isAutoCenteringPaused)
+        #expect(!reloaded.centersOnWindowScreen)
+        #expect(reloaded.animationStyle == .instant)
+    }
+}
