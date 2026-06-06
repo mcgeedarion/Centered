@@ -223,6 +223,22 @@ Contributions are welcome! Please:
 - Expected vs. actual behavior
 - Centered version (from **About Centered** in the menu)
 
+## Release Checklist
+
+Use the release script from a clean macOS machine with Xcode installed:
+
+```bash
+./scripts/release_archive.sh
+```
+
+Before publishing a release:
+
+1. Confirm CI is green for the release commit.
+2. Run the release archive script and verify it produces `build/export/Centered.app.zip`.
+3. Sign with your Developer ID certificate and notarize the zip for public distribution.
+4. Verify the notarized app with `spctl --assess --type execute --verbose=4 Centered.app`.
+5. Attach the notarized zip to GitHub Releases with release notes and the expected macOS/Xcode requirements.
+
 ## License
 
 Centered is released under the [MIT License](LICENSE). See the [LICENSE](LICENSE) file for details.

@@ -382,15 +382,25 @@ final class PermissionManager {
     }
 
     private func performPermissionCheck() {
-        guard !AccessibilityAuthorization.isTrusted else { return }
-        controller?.disableApp()
-        controller?.showPermissionAlert()
+        synchronizePermissionState(showAlertWhenMissing: true)
     }
 
     func handleAccessibilityTrustChange() {
-        guard !AccessibilityAuthorization.isTrusted else { return }
-        controller?.disableApp()
-        controller?.showPermissionAlert()
+        synchronizePermissionState(showAlertWhenMissing: true)
+    }
+
+    private func synchronizePermissionState(showAlertWhenMissing: Bool) {
+        guard let controller else { return }
+
+        if AccessibilityAuthorization.isTrusted {
+            controller.enableApp()
+            return
+        }
+
+        controller.disableApp()
+        if showAlertWhenMissing {
+            controller.showPermissionAlert()
+        }
     }
 
     deinit {
@@ -666,7 +676,10 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
     func enableApp() {
         guard !isEnabled else { return }
         guard AccessibilityAuthorization.isTrusted else {
+            permissionManager?.startPermissionChecks()
             showPermissionAlert()
+            updateStatusAppearance()
+            menuController?.rebuildActionsSection()
             return
         }
 
