@@ -20,7 +20,7 @@ extension NSEvent.ModifierFlags {
     }
 }
 
-struct HotKeyBinding: Equatable {
+struct HotKeyBinding: Equatable, Codable {
 
     var keyCode:   UInt16
     var modifiers: NSEvent.ModifierFlags
@@ -40,14 +40,45 @@ struct HotKeyBinding: Equatable {
     init?(dictionary: [String: Any]) {
         guard let kc = dictionary["keyCode"] as? Int,
               let keyCode = UInt16(exactly: kc),
-              let mf = dictionary["modifiers"] as? UInt
+              let modifiersRawValue = HotKeyBinding.modifierRawValue(from: dictionary["modifiers"])
         else { return nil }
         self.keyCode = keyCode
-        modifiers = NSEvent.ModifierFlags(rawValue: mf).intersection(kSupportedHotKeyModifiers)
+        modifiers = NSEvent.ModifierFlags(rawValue: modifiersRawValue).intersection(kSupportedHotKeyModifiers)
+    }
+
+    private static func modifierRawValue(from value: Any?) -> UInt? {
+        if let raw = value as? UInt { return raw }
+        if let raw = value as? Int { return UInt(exactly: raw) }
+        if let raw = value as? UInt64 { return UInt(exactly: raw) }
+        if let raw = value as? NSNumber, raw.int64Value >= 0 {
+            return UInt(exactly: raw.uint64Value)
+        }
+        return nil
     }
 
     var displayString: String {
         modifiers.hotKeyDisplayString + keyCodeDisplayString(keyCode)
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case keyCode
+        case modifiers
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedKeyCode = try container.decode(UInt16.self, forKey: .keyCode)
+        let decodedModifiers = try container.decode(UInt.self, forKey: .modifiers)
+        self.init(
+            keyCode: decodedKeyCode,
+            modifiers: NSEvent.ModifierFlags(rawValue: decodedModifiers)
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(keyCode, forKey: .keyCode)
+        try container.encode(modifiers.rawValue, forKey: .modifiers)
     }
 
     /// NSEvent modifier flags converted to the Carbon mask for RegisterEventHotKey.
@@ -168,6 +199,8 @@ final class HotKey {
     /// - Throws: `HotKeyError` if re-registration fails during rebind.
     func rebind(to newBinding: HotKeyBinding) throws {
         guard binding != newBinding else { return }
+        let oldBinding = binding
+        let oldHotKeyID = hotKeyID
         let wasActive = isActive
 
         if wasActive {
@@ -175,14 +208,15 @@ final class HotKey {
         }
 
         binding  = newBinding
-        hotKeyID = nextHotKeyID()  // Fresh ID avoids stale matches
+        hotKeyID = nextHotKeyID()
 
         if wasActive {
             do {
                 try activate()
             } catch {
-                // If reactivation fails, remain deactivated
-                assertionFailure("Failed to reactivate hot key after rebind: \(error)")
+                binding = oldBinding
+                hotKeyID = oldHotKeyID
+                try? activate()
                 throw error
             }
         }
@@ -256,7 +290,7 @@ final class HotKey {
             let status = UnregisterEventHotKey(ref)
             // Log error but don't throw in cleanup path
             if status != noErr {
-                print("Warning: UnregisterEventHotKey failed with status \(status)")
+                NSLog("Warning: UnregisterEventHotKey failed with status \(status)")
             }
             hotKeyRef = nil
         }

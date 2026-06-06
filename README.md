@@ -24,7 +24,10 @@ A lightweight, zero-dependency macOS menu-bar utility that automatically centers
 - **Center All Windows** — centers every non-minimized window of the frontmost app (default `⌘⇧C`)
 - **Customizable hotkeys** — remap both shortcuts from the Preferences window
 - **Per-app exclusion list** — exclude any app by bundle ID so it is never auto-centered
-- **Multi-screen support** — pick which display to center on; preference persists across launches
+- **Pause Auto-Centering** — temporarily stop automatic moves while keeping manual hotkeys available
+- **Multi-screen support** — center on the window’s current display by default, or pick a fixed display
+- **Animation controls** — choose Instant, Subtle, or Smooth motion from the menu
+- **Diagnostics** — copy a compact permissions/settings summary when troubleshooting
 - **Launch at Login** — register/unregister as a login item from the menu (macOS 13+)
 - **No dependencies** — entirely self-contained with zero external package requirements
 
@@ -49,8 +52,8 @@ open Centered/Centered.xcodeproj
 Then build and run with `⌘R` in Xcode (or `⌘B` to build only).
 
 **Requirements:**
-- Xcode 15 or later
-- Swift 5.9 or later
+- Xcode 16 or later
+- Swift 5 language mode with a Swift Testing-capable toolchain
 - macOS 13 Ventura or later (to build and run)
 
 ## Requirements
@@ -58,8 +61,8 @@ Then build and run with `⌘R` in Xcode (or `⌘B` to build only).
 | System | Minimum Version |
 |---|---|
 | **macOS** | 13 Ventura or later |
-| **Xcode** (to build) | 15 or later |
-| **Swift** (to build) | 5.9 or later |
+| **Xcode** (to build) | 16 or later |
+| **Swift** (to build) | Swift 5 language mode with Swift Testing support |
 
 ## Getting Started
 
@@ -92,7 +95,11 @@ Access preferences via **Preferences…** (`⌘,`) in the menu bar to:
 
 - **Remap Hotkeys** — change the default keyboard shortcuts to your preference
 - **Manage Exclusions** — add apps (by bundle ID) that should never auto-center
-- **Select Display** — choose which screen windows center on (if using multiple displays)
+- **Select Display** — choose which screen windows center on when fixed-display mode is used
+- **Pause Auto-Centering** — temporarily disable automatic window moves without disabling manual hotkeys
+- **Center on Window Display** — follow the active window across multiple displays
+- **Animation Style** — switch between Instant, Subtle, and Smooth motion
+- **Diagnostics** — copy status, permission, hotkey, and display details for troubleshooting
 - **Launch at Login** — toggle automatic startup with your Mac
 
 ## Hotkey Defaults
@@ -137,13 +144,13 @@ Centered is architected as a collection of focused, single-responsibility module
 
 | File | Responsibility |
 |---|---|
-| `AppDelegate.swift` | App lifecycle, status-bar menu (incrementally rebuilt per section — screens/actions/system), hotkey wiring, AX permission polling |
-| `WindowCenterer.swift` | AX centering logic, cubic ease-out animation, AppleScript fallback (dispatched off the main thread to avoid blocking AX callbacks) |
+| `AppDelegate.swift` | App lifecycle, status-bar menu, pause/display/animation controls, diagnostics, hotkey wiring, AX permission polling |
+| `WindowCenterer.swift` | AX centering logic, display selection, near-full-screen skipping, configurable animation, AppleScript fallback |
 | `WindowObserver.swift` | AXObserver setup, per-app exclusion filtering, explicit retain-counter lifecycle (`selfRetainCount`) |
-| `HotKey.swift` | NSEvent-based global/local key monitor, runtime rebind support |
+| `HotKey.swift` | Carbon global hotkey registration, conflict rollback, display formatting, and runtime rebind support |
 | `PreferencesWindowController.swift` | Preferences UI — hotkey recorder and exclusion list table view |
 | `ViewController.swift` | Menu-bar popover/window toggle switch and status indicator |
-| `UserDefaults+Centered.swift` | Typed UserDefaults accessors; all preference key strings centralized here |
+| `UserDefaults+Centered.swift` | Typed UserDefaults accessors, migrations, and centralized preference key strings |
 
 ## Troubleshooting
 
@@ -193,7 +200,7 @@ Build with `⌘B` or run with `⌘R` in Xcode.
 
 ### Code Style
 
-- Swift 5.9+ conventions
+- Swift 5 language-mode conventions with Xcode 16 tooling
 - Xcode's default formatting rules
 - Clear, descriptive variable and function names
 
