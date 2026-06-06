@@ -257,6 +257,20 @@ struct DisplaySelectionTests {
         #expect(WindowCenterer.bestScreenIndex(containing: window, screenRects: screens) == 1)
     }
 
+    @Test func picksNearestScreenWhenWindowHasNoOverlap() {
+        let screens = [
+            CGRect(x: 0, y: 0, width: 1000, height: 800),
+            CGRect(x: 1200, y: 0, width: 1000, height: 800),
+        ]
+        let window = CGRect(x: 2300, y: 100, width: 300, height: 300)
+        #expect(WindowCenterer.bestScreenIndex(containing: window, screenRects: screens) == 1)
+    }
+
+    @Test func emptyScreenListReturnsNil() {
+        let window = CGRect(x: 0, y: 0, width: 300, height: 300)
+        #expect(WindowCenterer.bestScreenIndex(containing: window, screenRects: []) == nil)
+    }
+
     @Test func nearFullScreenWindowsAreSkipped() {
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
         #expect(WindowCenterer.isEffectivelyFullScreen(windowSize: CGSize(width: 1420, height: 890), in: screen))

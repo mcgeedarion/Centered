@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: macos-15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build and test
+        run: |
+          xcodebuild \
+            -project Centered.xcodeproj \
+            -scheme Centered \
+            -configuration Debug \
+            -derivedDataPath build/DerivedData \
+            clean test
+
+      - name: Release archive smoke test
+        run: |
+          xcodebuild \
+            -project Centered.xcodeproj \
+            -scheme Centered \
+            -configuration Release \
+            -derivedDataPath build/DerivedData \
+            -archivePath build/Centered.xcarchive \
+            archive CODE_SIGNING_ALLOWED=NO VALIDATE_PRODUCT=NO

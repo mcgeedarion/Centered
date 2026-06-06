@@ -140,7 +140,9 @@ final class WindowCenterer {
         else { return }
 
         let token = DispatchWorkItem { [weak self] in
-            self?.performCenter(window: window)
+            guard let self else { return }
+            self.debounceTokens.removeValue(forKey: window)
+            self.performCenter(window: window)
         }
         debounceTokens[window]?.cancel()
         debounceTokens[window] = token
@@ -306,8 +308,18 @@ final class WindowCenterer {
     }
 
     nonisolated static func bestScreenIndex(containing windowFrame: CGRect, screenRects: [CGRect]) -> Int? {
-        screenRects.indices.max { lhs, rhs in
-            screenRects[lhs].intersection(windowFrame).area < screenRects[rhs].intersection(windowFrame).area
+        guard !screenRects.isEmpty else { return nil }
+
+        let overlapAreas = screenRects.map { $0.intersection(windowFrame).area }
+        if let largestOverlap = overlapAreas.max(), largestOverlap > 0 {
+            return screenRects.indices.max { overlapAreas[$0] < overlapAreas[$1] }
+        }
+
+        // If a restored or newly-created window reports a frame outside all displays,
+        // choose the nearest display instead of depending on Array.max tie-breaking.
+        return screenRects.indices.min {
+            screenRects[$0].center.squaredDistance(to: windowFrame.center) <
+            screenRects[$1].center.squaredDistance(to: windowFrame.center)
         }
     }
 
@@ -344,5 +356,17 @@ private extension CGRect {
     var area: CGFloat {
         guard !isNull, !isEmpty else { return 0 }
         return width * height
+    }
+
+    var center: CGPoint {
+        CGPoint(x: midX, y: midY)
+    }
+}
+
+private extension CGPoint {
+    func squaredDistance(to other: CGPoint) -> CGFloat {
+        let dx = x - other.x
+        let dy = y - other.y
+        return dx * dx + dy * dy
     }
 }
