@@ -1,34 +1,5 @@
 import Foundation
 
-// MARK: - Property Wrapper for UserDefaults
-
-@propertyWrapper
-struct UserDefault<Value: Codable> {
-    let key: String
-    let defaultValue: Value
-    private let userDefaults: UserDefaults
-    
-    init(_ key: String, defaultValue: Value, userDefaults: UserDefaults = .standard) {
-        self.key = key
-        self.defaultValue = defaultValue
-        self.userDefaults = userDefaults
-    }
-    
-    var wrappedValue: Value {
-        get {
-            guard let data = userDefaults.data(forKey: key) else { return defaultValue }
-            let decoder = JSONDecoder()
-            return (try? decoder.decode(Value.self, from: data)) ?? defaultValue
-        }
-        set {
-            let encoder = JSONEncoder()
-            if let encoded = try? encoder.encode(newValue) {
-                userDefaults.set(encoded, forKey: key)
-            }
-        }
-    }
-}
-
 // MARK: - Settings Protocol
 
 protocol Settings {
@@ -36,8 +7,11 @@ protocol Settings {
     var centerActiveBinding: HotKeyBinding { get set }
     var centerAllBinding: HotKeyBinding { get set }
     var excludedBundleIDs: Set<String> { get set }
-    
-    /// Reset all settings to their default values for testing purposes
+    var isAutoCenteringPaused: Bool { get set }
+    var centersOnWindowScreen: Bool { get set }
+    var animationStyle: WindowAnimationStyle { get set }
+
+    /// Reset all settings to their default values for testing purposes.
     mutating func reset()
 }
 
@@ -45,36 +19,15 @@ protocol Settings {
 
 struct DefaultSettings: Settings {
     private let defaults: UserDefaults
-    
-    // MARK: - Properties with UserDefault Wrapper
-    
-    @UserDefault("centerActiveBinding", defaultValue: HotKeyBinding())
-    private var _centerActiveBinding: HotKeyBinding
-    
-    @UserDefault("centerAllBinding", defaultValue: HotKeyBinding())
-    private var _centerAllBinding: HotKeyBinding
-    
-    @UserDefault("excludedBundleIDs", defaultValue: Set<String>())
-    private var _excludedBundleIDs: Set<String>
-    
-    // MARK: - Initialization
-    
+
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        // Initialize property wrappers
-        self._centerActiveBinding = UserDefault("centerActiveBinding", defaultValue: HotKeyBinding(), userDefaults: defaults)
-        self._centerAllBinding = UserDefault("centerAllBinding", defaultValue: HotKeyBinding(), userDefaults: defaults)
-        self._excludedBundleIDs = UserDefault("excludedBundleIDs", defaultValue: Set<String>(), userDefaults: defaults)
     }
-    
-    // MARK: - Validation
-    
+
     private func isValidScreenName(_ name: String) -> Bool {
         !name.isEmpty && name.count <= 256
     }
-    
-    // MARK: - Settings Properties
-    
+
     var selectedScreenName: String? {
         get {
             guard let name = defaults.selectedScreenName,
@@ -90,34 +43,46 @@ struct DefaultSettings: Settings {
             defaults.selectedScreenName = name
         }
     }
-    
+
     var centerActiveBinding: HotKeyBinding {
-        get { _centerActiveBinding }
-        set { _centerActiveBinding = newValue }
+        get { defaults.centerActiveBinding }
+        set { defaults.centerActiveBinding = newValue }
     }
-    
+
     var centerAllBinding: HotKeyBinding {
-        get { _centerAllBinding }
-        set { _centerAllBinding = newValue }
+        get { defaults.centerAllBinding }
+        set { defaults.centerAllBinding = newValue }
     }
-    
+
     var excludedBundleIDs: Set<String> {
-        get { _excludedBundleIDs }
-        set { _excludedBundleIDs = newValue }
+        get { defaults.excludedBundleIDs }
+        set { defaults.excludedBundleIDs = newValue }
     }
-    
-    // MARK: - Testability
-    
+
+    var isAutoCenteringPaused: Bool {
+        get { defaults.isAutoCenteringPaused }
+        set { defaults.isAutoCenteringPaused = newValue }
+    }
+
+    var centersOnWindowScreen: Bool {
+        get { defaults.centersOnWindowScreen }
+        set { defaults.centersOnWindowScreen = newValue }
+    }
+
+    var animationStyle: WindowAnimationStyle {
+        get { defaults.animationStyle }
+        set { defaults.animationStyle = newValue }
+    }
+
     mutating func reset() {
-        selectedScreenName = nil
-        centerActiveBinding = HotKeyBinding()
-        centerAllBinding = HotKeyBinding()
-        excludedBundleIDs = Set<String>()
-        
-        // Also clear from UserDefaults
-        defaults.removeObject(forKey: "selectedScreenName")
-        defaults.removeObject(forKey: "centerActiveBinding")
-        defaults.removeObject(forKey: "centerAllBinding")
-        defaults.removeObject(forKey: "excludedBundleIDs")
+        defaults.removeObject(forKey: UserDefaults.Key.selectedScreenName)
+        defaults.removeObject(forKey: UserDefaults.Key.centerActiveHotKey)
+        defaults.removeObject(forKey: UserDefaults.Key.centerAllHotKey)
+        defaults.removeObject(forKey: UserDefaults.Key.excludedBundleIDs)
+        defaults.removeObject(forKey: UserDefaults.Key.isAutoCenteringPaused)
+        defaults.removeObject(forKey: UserDefaults.Key.centersOnWindowScreen)
+        defaults.removeObject(forKey: UserDefaults.Key.animationStyle)
+        defaults.removeLegacyCenteredSettings()
+        ExclusionHMAC.resetStoredTag()
     }
 }

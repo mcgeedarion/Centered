@@ -1,16 +1,37 @@
 import Cocoa
 import ApplicationServices
+import os.log
 
 private let logger = Logger(
     subsystem: Bundle.main.bundleIdentifier ?? "Centered",
     category: "WindowCenterer"
 )
 
+enum WindowAnimationStyle: String, CaseIterable, Codable {
+    case instant
+    case subtle
+    case smooth
+
+    var displayName: String {
+        switch self {
+        case .instant: return "Instant"
+        case .subtle: return "Subtle"
+        case .smooth: return "Smooth"
+        }
+    }
+}
+
 private struct AnimationConfig {
     let steps: Int
     let interval: TimeInterval
-    
-    static let `default` = AnimationConfig(steps: 16, interval: 0.012)
+
+    static func config(for style: WindowAnimationStyle) -> AnimationConfig {
+        switch style {
+        case .instant: return AnimationConfig(steps: 1, interval: 0)
+        case .subtle:  return AnimationConfig(steps: 8, interval: 0.01)
+        case .smooth:  return AnimationConfig(steps: 16, interval: 0.012)
+        }
+    }
 }
 
 private struct AXWindow: Hashable {
@@ -95,6 +116,9 @@ private struct AXWindow: Hashable {
 final class WindowCenterer {
 
     var selectedScreen: NSScreen?
+    var isPaused = false
+    var centersOnWindowScreen = true
+    var animationStyle: WindowAnimationStyle = .smooth
     private(set) var isCentering = false
 
     // Track animation tokens per window so we can cancel/replace cleanly.
@@ -104,9 +128,9 @@ final class WindowCenterer {
     private var debounceTokens: [AXWindow: DispatchWorkItem] = [:]
     private let debounceInterval: TimeInterval = 0.03
     
-    private let animationConfig = AnimationConfig.default
 
     func center(window element: AXUIElement) {
+        guard !isPaused else { return }
         center(window: AXWindow(element))
     }
 
@@ -124,7 +148,7 @@ final class WindowCenterer {
     }
 
     func centerFrontmost() {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        guard !isPaused, let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
 
         if let win = axFocusedWindow(in: el) {
@@ -137,7 +161,7 @@ final class WindowCenterer {
     }
 
     func centerAllWindows() {
-        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        guard !isPaused, let app = NSWorkspace.shared.frontmostApplication else { return }
         let el = AXUIElementCreateApplication(app.processIdentifier)
 
         guard let windows = axWindows(el), !windows.isEmpty else {
@@ -199,17 +223,29 @@ final class WindowCenterer {
 
     @discardableResult
     private func centerViaAX(window: AXWindow) -> Bool {
-        guard let screen = selectedScreen ?? NSScreen.main,
-              let size   = window.size
+        guard let size = window.size,
+              let position = window.position,
+              let screen = targetScreen(forWindowFrame: CGRect(origin: position, size: size))
         else { return false }
 
+        guard !WindowCenterer.isEffectivelyFullScreen(windowSize: size, in: screen.visibleFrame) else {
+            logger.debug("Skipping near full-screen window")
+            return true
+        }
+
         let target = CGPoint.centeredOrigin(of: size, in: screen.visibleFrame)
-        animateWindowPosition(window, to: target)
+        animateWindowPosition(window, from: position, to: target)
         return true
     }
 
-    private func animateWindowPosition(_ window: AXWindow, to target: CGPoint) {
-        guard let start = window.position, start != target else { return }
+    private func animateWindowPosition(_ window: AXWindow, from start: CGPoint, to target: CGPoint) {
+        guard start != target else { return }
+
+        let animationConfig = AnimationConfig.config(for: animationStyle)
+        if animationConfig.steps <= 1 {
+            window.setPosition(target)
+            return
+        }
 
         isCentering = true
         let token   = DispatchWorkItem {}
@@ -246,6 +282,35 @@ final class WindowCenterer {
         step(1)
     }
 
+    private func targetScreen(forWindowFrame windowFrame: CGRect) -> NSScreen? {
+        if centersOnWindowScreen,
+           let screen = WindowCenterer.screen(containing: windowFrame, screens: NSScreen.screens) {
+            return screen
+        }
+        return selectedScreen ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    nonisolated static func isValidAppleScriptBundleID(_ bundleID: String) -> Bool {
+        AppleScriptCenterer.isValidBundleID(bundleID)
+    }
+
+    nonisolated static func isEffectivelyFullScreen(windowSize: CGSize, in screenRect: CGRect) -> Bool {
+        windowSize.width >= screenRect.width * 0.98 && windowSize.height >= screenRect.height * 0.98
+    }
+
+    static func screen(containing windowFrame: CGRect, screens: [NSScreen]) -> NSScreen? {
+        guard let index = bestScreenIndex(containing: windowFrame, screenRects: screens.map(\.visibleFrame)) else {
+            return nil
+        }
+        return screens[index]
+    }
+
+    nonisolated static func bestScreenIndex(containing windowFrame: CGRect, screenRects: [CGRect]) -> Int? {
+        screenRects.indices.max { lhs, rhs in
+            screenRects[lhs].intersection(windowFrame).area < screenRects[rhs].intersection(windowFrame).area
+        }
+    }
+
     private func axFocusedWindow(in appElement: AXUIElement) -> AXWindow? {
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &raw) == .success,
@@ -272,5 +337,12 @@ final class WindowCenterer {
 private extension CGPoint {
     static func centeredOrigin(of size: CGSize, in rect: CGRect) -> CGPoint {
         WindowCenterer.centeredOrigin(windowSize: size, in: rect)
+    }
+}
+
+private extension CGRect {
+    var area: CGFloat {
+        guard !isNull, !isEmpty else { return 0 }
+        return width * height
     }
 }
