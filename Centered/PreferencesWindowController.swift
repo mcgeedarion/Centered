@@ -374,7 +374,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func insertExclusion(_ id: String) {
-        guard !excludedIDs.contains(id) else { return }
+        guard ExclusionHMAC.isValidBundleID(id), !excludedIDs.contains(id) else { return }
         excludedIDs.insert(id)
         updateTableView()
     }
