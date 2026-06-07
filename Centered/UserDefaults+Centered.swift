@@ -63,6 +63,13 @@ extension UserDefaults {
         get {
             ExclusionHMAC.hmacQueue.sync {
                 let raw = Set(stringArray(forKey: Key.excludedBundleIDs) ?? [])
+                guard raw.allSatisfy(ExclusionHMAC.isValidBundleID) else {
+                    if !raw.isEmpty {
+                        os_log("Excluded bundle IDs contain invalid values - returning empty set",
+                               log: .default, type: .error)
+                    }
+                    return []
+                }
                 if ExclusionHMAC.verify(raw) {
                     return raw
                 }
@@ -75,8 +82,9 @@ extension UserDefaults {
         }
         set {
             ExclusionHMAC.hmacQueue.sync(flags: .barrier) {
-                set(Array(newValue.sorted()), forKey: Key.excludedBundleIDs)
-                ExclusionHMAC.store(newValue)
+                let validIDs = Set(newValue.filter(ExclusionHMAC.isValidBundleID))
+                set(Array(validIDs.sorted()), forKey: Key.excludedBundleIDs)
+                ExclusionHMAC.store(validIDs)
             }
         }
     }
@@ -129,7 +137,16 @@ enum ExclusionHMAC {
         attributes: .concurrent
     )
 
+    static func isValidBundleID(_ id: String) -> Bool {
+        AppleScriptCenterer.isValidBundleID(id)
+    }
+
     private static func serialise(_ ids: Set<String>) -> Data {
+        let payload = ids.sorted().map { "\($0.utf8.count):\($0)" }.joined(separator: "\n")
+        return payload.data(using: .utf8) ?? Data()
+    }
+
+    private static func legacySerialise(_ ids: Set<String>) -> Data {
         ids.sorted().joined(separator: "\n").data(using: .utf8) ?? Data()
     }
 
@@ -232,11 +249,22 @@ enum ExclusionHMAC {
     }
 
     static func verify(_ ids: Set<String>) -> Bool {
+        guard ids.allSatisfy(isValidBundleID) else { return false }
         guard let storedTag = loadTag() else {
             return ids.isEmpty
         }
-        let mac = HMAC<SHA256>.authenticationCode(for: serialise(ids), using: hmacKey())
-        return storedTag == Data(mac)
+
+        let key = hmacKey()
+        if HMAC<SHA256>.isValidAuthenticationCode(storedTag, authenticating: serialise(ids), using: key) {
+            return true
+        }
+
+        if HMAC<SHA256>.isValidAuthenticationCode(storedTag, authenticating: legacySerialise(ids), using: key) {
+            store(ids)
+            return true
+        }
+
+        return false
     }
 
     static func resetStoredTag() {

@@ -307,4 +307,30 @@ struct DefaultSettingsPersistenceTests {
         #expect(!reloaded.centersOnWindowScreen)
         #expect(reloaded.animationStyle == .instant)
     }
+
+    @Test func exclusionsRejectInvalidBundleIDs() {
+        let suiteName = "CenteredTests.exclusionsRejectInvalidBundleIDs"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        var settings = DefaultSettings(defaults: suite)
+        settings.reset()
+
+        settings.excludedBundleIDs = ["com.example.safe", "com.example.bad\ncom.apple.Terminal"]
+
+        #expect(settings.excludedBundleIDs == ["com.example.safe"])
+        #expect(suite.stringArray(forKey: UserDefaults.Key.excludedBundleIDs) == ["com.example.safe"])
+    }
+
+    @Test func tamperedInvalidExclusionsFailClosed() {
+        let suiteName = "CenteredTests.tamperedInvalidExclusionsFailClosed"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        var settings = DefaultSettings(defaults: suite)
+        settings.reset()
+
+        settings.excludedBundleIDs = ["com.example.safe"]
+        suite.set(["com.example.safe", "com.example.bad\ncom.apple.Terminal"], forKey: UserDefaults.Key.excludedBundleIDs)
+
+        #expect(settings.excludedBundleIDs.isEmpty)
+    }
 }
