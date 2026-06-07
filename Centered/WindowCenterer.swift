@@ -250,38 +250,65 @@ final class WindowCenterer {
         }
 
         isCentering = true
-        let token   = DispatchWorkItem {}
+        let token = DispatchWorkItem {}
         animationTokens[window]?.cancel()
         animationTokens[window] = token
 
-        func finish() {
-            if let current = animationTokens[window], current === token {
-                animationTokens.removeValue(forKey: window)
-            }
-            if animationTokens.isEmpty { isCentering = false }
+        runAnimationStep(
+            1,
+            window: window,
+            from: start,
+            to: target,
+            config: animationConfig,
+            token: token
+        )
+    }
+
+    private func runAnimationStep(
+        _ step: Int,
+        window: AXWindow,
+        from start: CGPoint,
+        to target: CGPoint,
+        config: AnimationConfig,
+        token: DispatchWorkItem
+    ) {
+        guard step <= config.steps,
+              !token.isCancelled,
+              window.isValid
+        else {
+            finishAnimation(for: window, token: token)
+            return
         }
 
-        func step(_ i: Int) {
-            guard i <= animationConfig.steps,
-                  !token.isCancelled,
-                  window.isValid
-            else { finish(); return }
+        let position = WindowCenterer.animationPosition(
+            from: start,
+            to: target,
+            step: step,
+            totalSteps: config.steps
+        )
+        window.setPosition(position)
 
-            let pos = WindowCenterer.animationPosition(
-                from: start, to: target, step: i, totalSteps: animationConfig.steps
-            )
-            window.setPosition(pos)
-
-            if i < animationConfig.steps {
-                DispatchQueue.main.asyncAfter(deadline: .now() + animationConfig.interval) { [weak self] in
-                    self?.step(i + 1)
-                }
-            } else {
-                finish()
+        if step < config.steps {
+            DispatchQueue.main.asyncAfter(deadline: .now() + config.interval) { [weak self] in
+                self?.runAnimationStep(
+                    step + 1,
+                    window: window,
+                    from: start,
+                    to: target,
+                    config: config,
+                    token: token
+                )
             }
+        } else {
+            finishAnimation(for: window, token: token)
         }
+    }
 
-        step(1)
+    private func finishAnimation(for window: AXWindow, token: DispatchWorkItem) {
+        if let current = animationTokens[window], current === token {
+            animationTokens.removeValue(forKey: window)
+        }
+        if animationTokens.isEmpty { isCentering = false }
     }
 
     private func targetScreen(forWindowFrame windowFrame: CGRect) -> NSScreen? {
