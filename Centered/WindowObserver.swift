@@ -114,6 +114,9 @@ final class WindowObserver {
 
     private func addObserver(forPID pid: pid_t, bundleID: String?) {
         guard boxes[pid] == nil else { return }
+        if let bundleID {
+            bundleIDs[pid] = bundleID
+        }
 
         var axObserver: AXObserver?
         let result = AXObserverCreate(pid, axObserverCallback, &axObserver)
@@ -143,7 +146,6 @@ final class WindowObserver {
         addRunLoopSource(for: axObserver)
         let box       = Unmanaged<ObserverBox>.fromOpaque(refcon).takeUnretainedValue()
         boxes[pid]    = box
-        bundleIDs[pid] = bundleID
         pendingRetry.removeValue(forKey: pid)
         
         logger.debug("Observer added for PID \(pid, privacy: .public) (\(bundleID ?? "unknown", privacy: .public))")
