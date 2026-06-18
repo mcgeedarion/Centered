@@ -27,34 +27,24 @@ extension UserDefaults {
 
     var centerActiveBinding: HotKeyBinding {
         get {
-            if let dict = dictionary(forKey: Key.centerActiveHotKey),
-               let binding = HotKeyBinding(dictionary: dict) {
-                return binding
-            }
-            if let migrated = migratedHotKeyBinding(forKey: Key.legacyCenterActiveBinding) {
-                centerActiveBinding = migrated
-                removeObject(forKey: Key.legacyCenterActiveBinding)
-                return migrated
-            }
-            return .centerActive
+            persistedHotKeyBinding(
+                currentKey: Key.centerActiveHotKey,
+                legacyKey: Key.legacyCenterActiveBinding,
+                defaultBinding: .centerActive
+            )
         }
-        set { set(newValue.dictionaryRepresentation, forKey: Key.centerActiveHotKey) }
+        set { setHotKeyBinding(newValue, forKey: Key.centerActiveHotKey) }
     }
 
     var centerAllBinding: HotKeyBinding {
         get {
-            if let dict = dictionary(forKey: Key.centerAllHotKey),
-               let binding = HotKeyBinding(dictionary: dict) {
-                return binding
-            }
-            if let migrated = migratedHotKeyBinding(forKey: Key.legacyCenterAllBinding) {
-                centerAllBinding = migrated
-                removeObject(forKey: Key.legacyCenterAllBinding)
-                return migrated
-            }
-            return .centerAll
+            persistedHotKeyBinding(
+                currentKey: Key.centerAllHotKey,
+                legacyKey: Key.legacyCenterAllBinding,
+                defaultBinding: .centerAll
+            )
         }
-        set { set(newValue.dictionaryRepresentation, forKey: Key.centerAllHotKey) }
+        set { setHotKeyBinding(newValue, forKey: Key.centerAllHotKey) }
     }
 
     /// Stores and verifies excluded bundle IDs using a Keychain-backed HMAC.
@@ -115,6 +105,27 @@ extension UserDefaults {
     func removeLegacyCenteredSettings() {
         removeObject(forKey: Key.legacyCenterActiveBinding)
         removeObject(forKey: Key.legacyCenterAllBinding)
+    }
+
+    private func persistedHotKeyBinding(
+        currentKey: String,
+        legacyKey: String,
+        defaultBinding: HotKeyBinding
+    ) -> HotKeyBinding {
+        if let dict = dictionary(forKey: currentKey),
+           let binding = HotKeyBinding(dictionary: dict) {
+            return binding
+        }
+        if let migrated = migratedHotKeyBinding(forKey: legacyKey) {
+            setHotKeyBinding(migrated, forKey: currentKey)
+            removeObject(forKey: legacyKey)
+            return migrated
+        }
+        return defaultBinding
+    }
+
+    private func setHotKeyBinding(_ binding: HotKeyBinding, forKey key: String) {
+        set(binding.dictionaryRepresentation, forKey: key)
     }
 
     private func migratedHotKeyBinding(forKey key: String) -> HotKeyBinding? {

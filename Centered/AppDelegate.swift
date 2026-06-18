@@ -142,6 +142,19 @@ final class MenuController {
         self.statusItem = statusItem
     }
 
+    func buildFullMenu() {
+        rebuildMenu()
+    }
+
+    func rebuildScreenSection() {
+        rebuildMenu()
+    }
+
+    func rebuildActionsSection() {
+        rebuildMenu()
+    }
+
+    private func rebuildMenu() {
     func rebuildMenu() {
         guard let coordinator else { return }
         statusItem?.menu = createMenuState(coordinator: coordinator).buildMenu()
@@ -456,6 +469,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         set {
             centerer.selectedScreen = newValue
             settings.selectedScreenName = newValue?.localizedName
+            rebuildMenuSection(.screens)
             menuController?.rebuildMenu()
         }
     }
@@ -610,6 +624,25 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         centerer.isPaused = settings.isAutoCenteringPaused
         centerer.centersOnWindowScreen = settings.centersOnWindowScreen
         centerer.animationStyle = settings.animationStyle
+    }
+
+    private enum MenuSection {
+        case screens
+        case actions
+    }
+
+    private func rebuildMenuSection(_ section: MenuSection) {
+        switch section {
+        case .screens:
+            menuController?.rebuildScreenSection()
+        case .actions:
+            menuController?.rebuildActionsSection()
+        }
+    }
+
+    private func refreshStatusMenu() {
+        updateStatusAppearance()
+        rebuildMenuSection(.actions)
     }
 
     private func updateStatusAppearance() {

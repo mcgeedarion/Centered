@@ -141,12 +141,7 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Window Delegate
     func windowDidBecomeKey(_ notification: Notification) {
         guard let settings = host?.settings else { return }
-        let activeBinding = settings.centerActiveBinding
-        let allBinding    = settings.centerAllBinding
-        activeKeyRecorder.binding         = activeBinding
-        allKeyRecorder.binding            = allBinding
-        activeKeyRecorder.conflictBinding = allBinding
-        allKeyRecorder.conflictBinding    = activeBinding
+        refreshBindings(from: settings)
         excludedIDs = settings.excludedBundleIDs
         tableView.reloadData()
     }
@@ -155,6 +150,15 @@ final class PreferencesWindowController: NSWindowController, NSWindowDelegate {
         openPanel?.cancel(nil)
         openPanel = nil
         host?.preferencesWindowDidClose()
+    }
+
+    private func refreshBindings(from settings: Settings) {
+        let activeBinding = settings.centerActiveBinding
+        let allBinding = settings.centerAllBinding
+        activeKeyRecorder.binding = activeBinding
+        allKeyRecorder.binding = allBinding
+        activeKeyRecorder.conflictBinding = allBinding
+        allKeyRecorder.conflictBinding = activeBinding
     }
 
     // MARK: - UI Building
