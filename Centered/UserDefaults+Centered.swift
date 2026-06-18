@@ -185,7 +185,7 @@ enum ExclusionHMAC {
                 kSecAttrService:    service,
                 kSecAttrAccount:    keyAccount,
                 kSecValueData:      keyData,
-                kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
+                kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             ]
             storeStatus = SecItemAdd(attrs as CFDictionary, nil)
         }
@@ -232,7 +232,7 @@ enum ExclusionHMAC {
                 kSecAttrService:    service,
                 kSecAttrAccount:    account,
                 kSecValueData:      tag,
-                kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlock,
+                kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             ]
             let addStatus = SecItemAdd(attrs as CFDictionary, nil)
             if addStatus != errSecSuccess {
