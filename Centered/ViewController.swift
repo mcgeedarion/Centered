@@ -1,5 +1,4 @@
 import Cocoa
-import Combine
 
 @MainActor
 class ViewController: NSViewController {
@@ -8,7 +7,6 @@ class ViewController: NSViewController {
         NSApplication.shared.delegate as? AppDelegate
     }()
 
-    private var cancellables = Set<AnyCancellable>()
     private var notificationObservers: [NSObjectProtocol] = []
 
     @IBOutlet weak var toggleSwitch: NSSwitch!
@@ -17,7 +15,6 @@ class ViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         setupNotifications()
-        setupReactiveBindings()
         updateUI()
     }
 
@@ -47,14 +44,6 @@ class ViewController: NSViewController {
         }
         
         notificationObservers = [appStateObserver, hotkeyObserver]
-    }
-
-    private func setupReactiveBindings() {
-        // If AppDelegate has a publisher, uncomment this for reactive updates:
-        // appDelegate?.statePublisher
-        //     .receive(on: DispatchQueue.main)
-        //     .sink { [weak self] _ in self?.updateUI() }
-        //     .store(in: &cancellables)
     }
 
     // MARK: - Actions
