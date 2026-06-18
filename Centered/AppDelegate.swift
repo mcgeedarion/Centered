@@ -142,22 +142,9 @@ final class MenuController {
         self.statusItem = statusItem
     }
 
-    func buildFullMenu() {
+    func rebuildMenu() {
         guard let coordinator else { return }
-        let menuState = createMenuState(coordinator: coordinator)
-        statusItem?.menu = menuState.buildMenu()
-    }
-
-    func rebuildScreenSection() {
-        guard let coordinator else { return }
-        let menuState = createMenuState(coordinator: coordinator)
-        statusItem?.menu = menuState.buildMenu()
-    }
-
-    func rebuildActionsSection() {
-        guard let coordinator else { return }
-        let menuState = createMenuState(coordinator: coordinator)
-        statusItem?.menu = menuState.buildMenu()
+        statusItem?.menu = createMenuState(coordinator: coordinator).buildMenu()
     }
 
     private func createMenuState(coordinator: AppCoordinating) -> MenuState {
@@ -286,7 +273,7 @@ final class MenuController {
     @objc private func selectScreen(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
         coordinator?.selectedScreen = NSScreen.screens.first { $0.localizedName == name }
-        rebuildScreenSection()
+        rebuildMenu()
     }
 
     @objc private func toggleLaunchAtLogin() {
@@ -295,12 +282,12 @@ final class MenuController {
 
     @objc private func togglePause() {
         coordinator?.isAutoCenteringPaused.toggle()
-        rebuildActionsSection()
+        rebuildMenu()
     }
 
     @objc private func toggleWindowDisplayMode() {
         coordinator?.centersOnWindowScreen.toggle()
-        rebuildActionsSection()
+        rebuildMenu()
     }
 
     @objc private func selectAnimationStyle(_ sender: NSMenuItem) {
@@ -308,7 +295,7 @@ final class MenuController {
               let style = WindowAnimationStyle(rawValue: raw)
         else { return }
         coordinator?.animationStyle = style
-        rebuildActionsSection()
+        rebuildMenu()
     }
 
     @objc private func centerActiveMenuItem() {
@@ -469,7 +456,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         set {
             centerer.selectedScreen = newValue
             settings.selectedScreenName = newValue?.localizedName
-            menuController?.rebuildScreenSection()
+            menuController?.rebuildMenu()
         }
     }
 
@@ -477,7 +464,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         get { LaunchAtLoginService.isEnabled }
         set {
             LaunchAtLoginService.setEnabled(newValue)
-            menuController?.rebuildActionsSection()
+            menuController?.rebuildMenu()
         }
     }
 
@@ -494,7 +481,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             centerer.isPaused = newValue
             if newValue { centerer.cancelAnimation() }
             updateStatusAppearance()
-            menuController?.rebuildActionsSection()
+            menuController?.rebuildMenu()
         }
     }
 
@@ -503,7 +490,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         set {
             settings.centersOnWindowScreen = newValue
             centerer.centersOnWindowScreen = newValue
-            menuController?.rebuildActionsSection()
+            menuController?.rebuildMenu()
         }
     }
 
@@ -512,7 +499,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         set {
             settings.animationStyle = newValue
             centerer.animationStyle = newValue
-            menuController?.rebuildActionsSection()
+            menuController?.rebuildMenu()
         }
     }
 
@@ -539,23 +526,11 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
     }
 
     func rebindHotKey(to binding: HotKeyBinding) {
-        do {
-            try hotKey.rebind(to: binding)
-            settings.centerActiveBinding = binding
-            menuController?.rebuildActionsSection()
-        } catch {
-            showHotKeyError(error, binding: binding)
-        }
+        rebind(hotKey, to: binding) { settings.centerActiveBinding = $0 }
     }
 
     func rebindAllWindowsHotKey(to binding: HotKeyBinding) {
-        do {
-            try allWindowsHotKey.rebind(to: binding)
-            settings.centerAllBinding = binding
-            menuController?.rebuildActionsSection()
-        } catch {
-            showHotKeyError(error, binding: binding)
-        }
+        rebind(allWindowsHotKey, to: binding) { settings.centerAllBinding = $0 }
     }
 
     func setExcludedBundleIDs(_ ids: Set<String>) {
@@ -575,7 +550,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         if AccessibilityAuthorization.isTrusted {
             enableApp()
             updateStatusAppearance()
-            menuController?.rebuildActionsSection()
+            menuController?.rebuildMenu()
         } else {
             AccessibilityAuthorization.requestIfNeeded()
             AccessibilityAuthorization.showAlertIfNeeded(force: true)
@@ -609,6 +584,20 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
     }
 
     // MARK: - Private Methods
+
+    private func rebind(
+        _ hotKey: HotKey,
+        to binding: HotKeyBinding,
+        persist: (HotKeyBinding) -> Void
+    ) {
+        do {
+            try hotKey.rebind(to: binding)
+            persist(binding)
+            menuController?.rebuildMenu()
+        } catch {
+            showHotKeyError(error, binding: binding)
+        }
+    }
 
     private func runIgnoringPause(_ action: () -> Void) {
         let wasPaused = centerer.isPaused
@@ -650,7 +639,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         if let item = statusItem {
             menuController = MenuController(statusItem: item)
             menuController?.coordinator = self
-            menuController?.buildFullMenu()
+            menuController?.rebuildMenu()
         }
     }
 
@@ -670,7 +659,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             logger.debug("Selected screen disconnected — resetting to main")
             centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
         }
-        menuController?.rebuildScreenSection()
+        menuController?.rebuildMenu()
     }
 
     func enableApp() {
@@ -679,7 +668,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             permissionManager?.startPermissionChecks()
             showPermissionAlert()
             updateStatusAppearance()
-            menuController?.rebuildActionsSection()
+            menuController?.rebuildMenu()
             return
         }
 
@@ -697,7 +686,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         }
 
         updateStatusAppearance()
-        menuController?.rebuildActionsSection()
+        menuController?.rebuildMenu()
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
         permissionManager?.startPermissionChecks()
     }
@@ -711,7 +700,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         centerer.cancelAnimation()
         permissionManager?.stopPermissionChecks()
         updateStatusAppearance()
-        menuController?.rebuildActionsSection()
+        menuController?.rebuildMenu()
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
     }
 
