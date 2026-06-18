@@ -42,8 +42,11 @@ struct HotKeyBinding: Equatable, Codable {
               let keyCode = UInt16(exactly: kc),
               let modifiersRawValue = HotKeyBinding.modifierRawValue(from: dictionary["modifiers"])
         else { return nil }
+        let sanitizedModifiers = NSEvent.ModifierFlags(rawValue: modifiersRawValue)
+            .intersection(kSupportedHotKeyModifiers)
+        guard !sanitizedModifiers.isEmpty else { return nil }
         self.keyCode = keyCode
-        modifiers = NSEvent.ModifierFlags(rawValue: modifiersRawValue).intersection(kSupportedHotKeyModifiers)
+        modifiers = sanitizedModifiers
     }
 
     private static func modifierRawValue(from value: Any?) -> UInt? {
@@ -69,10 +72,16 @@ struct HotKeyBinding: Equatable, Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let decodedKeyCode = try container.decode(UInt16.self, forKey: .keyCode)
         let decodedModifiers = try container.decode(UInt.self, forKey: .modifiers)
-        self.init(
-            keyCode: decodedKeyCode,
-            modifiers: NSEvent.ModifierFlags(rawValue: decodedModifiers)
-        )
+        let sanitizedModifiers = NSEvent.ModifierFlags(rawValue: decodedModifiers)
+            .intersection(kSupportedHotKeyModifiers)
+        guard !sanitizedModifiers.isEmpty else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .modifiers,
+                in: container,
+                debugDescription: "Hot keys must include at least one supported modifier"
+            )
+        }
+        self.init(keyCode: decodedKeyCode, modifiers: sanitizedModifiers)
     }
 
     func encode(to encoder: Encoder) throws {

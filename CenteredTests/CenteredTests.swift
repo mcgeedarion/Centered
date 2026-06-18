@@ -243,6 +243,17 @@ struct HotKeyBindingPreferenceDecodingTests {
         let decoded = HotKeyBinding(dictionary: ["keyCode": 8, "modifiers": raw])
         #expect(decoded?.modifiers == .command)
     }
+
+    @Test func missingSupportedModifiersAreRejected() {
+        #expect(HotKeyBinding(dictionary: ["keyCode": 8, "modifiers": UInt(0)]) == nil)
+    }
+
+    @Test func codableMissingSupportedModifiersAreRejected() {
+        let data = Data(#"{"keyCode":8,"modifiers":0}"#.utf8)
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(HotKeyBinding.self, from: data)
+        }
+    }
 }
 
 @Suite("WindowCenterer display selection")
