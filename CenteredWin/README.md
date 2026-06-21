@@ -42,10 +42,30 @@ pythonw main.py
 
 ## Building a Standalone .exe
 
-```bash
-pip install pyinstaller
-pyinstaller --noconsole --onefile main.py
-# Output: dist/main.exe
+From the repository root on Windows:
+
+```bat
+.\CenteredWin\build.cmd
+```
+
+Or from this directory:
+
+```bat
+.\build.cmd
+```
+
+The build creates or reuses `CenteredWin\.venv-build`, installs the runtime and build dependencies, and writes `CenteredWin\dist\CenteredWin.exe`.
+
+Use `-Clean` to remove the previous `build` and `dist` folders before packaging:
+
+```bat
+.\build.cmd -Clean
+```
+
+To force a specific Python install, pass `-Python`:
+
+```bat
+.\build.cmd -Python C:\Path\To\python.exe
 ```
 
 ## Hotkey Defaults
