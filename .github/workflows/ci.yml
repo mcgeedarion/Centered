@@ -34,3 +34,26 @@ jobs:
             -derivedDataPath build/DerivedData \
             -archivePath build/Centered.xcarchive \
             archive CODE_SIGNING_ALLOWED=NO VALIDATE_PRODUCT=NO
+
+  windows-build:
+    name: CenteredWin one-command build
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build CenteredWin executable
+        shell: cmd
+        run: .\CenteredWin\build.cmd
+
+      - name: Upload CenteredWin artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CenteredWin
+          path: CenteredWin/dist/CenteredWin.exe
+          if-no-files-found: error
