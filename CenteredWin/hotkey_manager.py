@@ -1,13 +1,17 @@
 import ctypes
 import ctypes.wintypes
 import threading
-from typing import Dict, Callable, Tuple
+from collections import deque
+from typing import Callable, Dict, Tuple
 
 MOD_ALT     = 0x0001
 MOD_CONTROL = 0x0002
 MOD_SHIFT   = 0x0004
 MOD_WIN     = 0x0008
 WM_HOTKEY   = 0x0312
+WM_APP      = 0x8000
+WM_HOTKEY_MANAGER_COMMAND = WM_APP + 1
+PM_NOREMOVE = 0x0000
 
 VK_MAP = {
     "A": 0x41, "B": 0x42, "C": 0x43, "D": 0x44, "E": 0x45,
@@ -36,10 +40,32 @@ def _parse_hotkey(s: str) -> Tuple[int, int]:
     return mods, vk
 
 
+class _MessageThreadCommand:
+    def __init__(self, callback: Callable):
+        self.callback = callback
+        self.done = threading.Event()
+        self.result = None
+        self.error = None
+
+    def run(self):
+        try:
+            self.result = self.callback()
+        except Exception as exc:
+            self.error = exc
+        finally:
+            self.done.set()
+
+
 class HotKeyManager:
     def __init__(self):
         self._handlers: Dict[int, Callable] = {}
         self._next_id = 1
+        self._id_lock = threading.Lock()
+        self._commands = deque()
+        self._commands_lock = threading.Lock()
+        self._ready = threading.Event()
+        self._thread_ident = None
+        self._thread_id = None
         self._thread = threading.Thread(target=self._message_loop, daemon=True)
         self._thread.start()
 
@@ -47,26 +73,80 @@ class HotKeyManager:
         mods, vk = _parse_hotkey(hotkey_str)
         if not vk:
             return -1
-        hid = self._next_id
-        self._next_id += 1
-        if ctypes.windll.user32.RegisterHotKey(None, hid, mods, vk):
-            self._handlers[hid] = handler
-            return hid
-        return -1
+        with self._id_lock:
+            hid = self._next_id
+            self._next_id += 1
+
+        def register_on_message_thread():
+            if ctypes.windll.user32.RegisterHotKey(None, hid, mods, vk):
+                self._handlers[hid] = handler
+                return hid
+            return -1
+
+        return self._call_on_message_thread(register_on_message_thread, -1)
 
     def unregister(self, hid: int):
-        ctypes.windll.user32.UnregisterHotKey(None, hid)
-        self._handlers.pop(hid, None)
+        def unregister_on_message_thread():
+            ctypes.windll.user32.UnregisterHotKey(None, hid)
+            self._handlers.pop(hid, None)
+
+        self._call_on_message_thread(unregister_on_message_thread)
 
     def unregister_all(self):
-        for hid in list(self._handlers):
-            ctypes.windll.user32.UnregisterHotKey(None, hid)
-        self._handlers.clear()
+        def unregister_all_on_message_thread():
+            for hid in list(self._handlers):
+                ctypes.windll.user32.UnregisterHotKey(None, hid)
+            self._handlers.clear()
+
+        self._call_on_message_thread(unregister_all_on_message_thread)
+
+    def _call_on_message_thread(self, callback: Callable, default=None):
+        if threading.get_ident() == self._thread_ident:
+            return callback()
+        if not self._ready.wait(timeout=5.0):
+            return default
+
+        command = _MessageThreadCommand(callback)
+        with self._commands_lock:
+            self._commands.append(command)
+
+        if not ctypes.windll.user32.PostThreadMessageW(
+            self._thread_id, WM_HOTKEY_MANAGER_COMMAND, 0, 0
+        ):
+            with self._commands_lock:
+                try:
+                    self._commands.remove(command)
+                except ValueError:
+                    pass
+            return default
+
+        if not command.done.wait(timeout=5.0) or command.error:
+            return default
+        return command.result
+
+    def _drain_commands(self):
+        while True:
+            with self._commands_lock:
+                if not self._commands:
+                    return
+                command = self._commands.popleft()
+            command.run()
 
     def _message_loop(self):
+        user32 = ctypes.windll.user32
+        self._thread_ident = threading.get_ident()
+        self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
+
         msg = ctypes.wintypes.MSG()
-        while ctypes.windll.user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
-            if msg.message == WM_HOTKEY:
+        # Force this thread's message queue to exist before other threads post
+        # control messages to it.
+        user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, PM_NOREMOVE)
+        self._ready.set()
+
+        while user32.GetMessageW(ctypes.byref(msg), None, 0, 0) != 0:
+            if msg.message == WM_HOTKEY_MANAGER_COMMAND:
+                self._drain_commands()
+            elif msg.message == WM_HOTKEY:
                 handler = self._handlers.get(msg.wParam)
                 if handler:
                     handler()
