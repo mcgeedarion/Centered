@@ -1,8 +1,11 @@
 import ctypes
 import ctypes.wintypes
+import logging
 import threading
 from collections import deque
 from typing import Callable, Dict, Tuple
+
+logger = logging.getLogger(__name__)
 
 MOD_ALT     = 0x0001
 MOD_CONTROL = 0x0002
@@ -72,6 +75,7 @@ class HotKeyManager:
     def register(self, hotkey_str: str, handler: Callable) -> int:
         mods, vk = _parse_hotkey(hotkey_str)
         if not vk:
+            logger.error("Invalid hotkey string: %r", hotkey_str)
             return -1
         with self._id_lock:
             hid = self._next_id
@@ -81,6 +85,10 @@ class HotKeyManager:
             if ctypes.windll.user32.RegisterHotKey(None, hid, mods, vk):
                 self._handlers[hid] = handler
                 return hid
+            logger.error(
+                "RegisterHotKey failed for %r (mods=%s, vk=%s)",
+                hotkey_str, mods, vk
+            )
             return -1
 
         return self._call_on_message_thread(register_on_message_thread, -1)
@@ -104,6 +112,7 @@ class HotKeyManager:
         if threading.get_ident() == self._thread_ident:
             return callback()
         if not self._ready.wait(timeout=5.0):
+            logger.error("HotKeyManager message thread did not become ready")
             return default
 
         command = _MessageThreadCommand(callback)
@@ -120,7 +129,11 @@ class HotKeyManager:
                     pass
             return default
 
-        if not command.done.wait(timeout=5.0) or command.error:
+        if not command.done.wait(timeout=5.0):
+            logger.error("HotKeyManager command timed out")
+            return default
+        if command.error:
+            logger.error("HotKeyManager command failed: %s", command.error)
             return default
         return command.result
 

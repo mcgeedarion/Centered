@@ -1,3 +1,4 @@
+import logging
 import threading, sys
 import win32clipboard
 import pystray
@@ -23,19 +24,34 @@ class CenteredApp:
         self.settings = AppSettings.load()
         self.hotkeys = HotKeyManager()
         self.observer = None
+        self.active_hotkey_registered = True
+        self.all_hotkey_registered = True
         self._bind_hotkeys()
         self._start_observer()
 
     def _bind_hotkeys(self):
         self.hotkeys.unregister_all()
-        self.hotkeys.register(
+        active_id = self.hotkeys.register(
             self.settings.center_active_hotkey,
             lambda: center_active_window(self.settings)
         )
-        self.hotkeys.register(
+        self.active_hotkey_registered = active_id >= 0
+        if not self.active_hotkey_registered:
+            logging.warning(
+                "Failed to register active hotkey: %s",
+                self.settings.center_active_hotkey
+            )
+
+        all_id = self.hotkeys.register(
             self.settings.center_all_hotkey,
             lambda: center_all_windows_of_foreground_app(self.settings)
         )
+        self.all_hotkey_registered = all_id >= 0
+        if not self.all_hotkey_registered:
+            logging.warning(
+                "Failed to register all windows hotkey: %s",
+                self.settings.center_all_hotkey
+            )
 
     def _start_observer(self):
         if self.observer:
@@ -85,7 +101,17 @@ class CenteredApp:
         icon.stop()
 
     def run(self):
-        menu = pystray.Menu(
+        errors = []
+        if not self.active_hotkey_registered:
+            errors.append(
+                f"Active hotkey unavailable: {self.settings.center_active_hotkey}"
+            )
+        if not self.all_hotkey_registered:
+            errors.append(
+                f"All-windows hotkey unavailable: {self.settings.center_all_hotkey}"
+            )
+
+        menu_items = [
             pystray.MenuItem(
                 "Center Active Window",
                 lambda i, it: center_active_window(self.settings)
@@ -111,15 +137,41 @@ class CenteredApp:
                     for style in ("Instant", "Subtle", "Smooth")
                 ]
             )),
+        ]
+
+        if errors:
+            menu_items.extend([
+                pystray.Menu.SEPARATOR,
+                pystray.MenuItem(
+                    "Hotkey registration issues",
+                    None,
+                    enabled=False
+                ),
+                *[
+                    pystray.MenuItem(error, None, enabled=False)
+                    for error in errors
+                ],
+            ])
+
+        menu_items.extend([
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Preferences…",     self._on_preferences),
             pystray.MenuItem("Copy Diagnostics", self._copy_diagnostics),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit Centered",    self._quit),
-        )
-        icon = pystray.Icon("Centered", make_icon(), "Centered", menu)
+        ])
+
+        menu = pystray.Menu(*menu_items)
+        title = "Centered"
+        if errors:
+            title = "⚠ " + title
+        icon = pystray.Icon("Centered", make_icon(), title, menu)
         icon.run()
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
+    )
     CenteredApp().run()

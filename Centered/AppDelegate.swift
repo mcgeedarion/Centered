@@ -155,7 +155,6 @@ final class MenuController {
     }
 
     private func rebuildMenu() {
-    func rebuildMenu() {
         guard let coordinator else { return }
         statusItem?.menu = createMenuState(coordinator: coordinator).buildMenu()
     }

@@ -1,9 +1,12 @@
+import logging
 import time
 import ctypes
 import ctypes.wintypes
 import win32api
 import win32gui
 import win32process
+
+logger = logging.getLogger(__name__)
 
 SWP_NOSIZE     = 0x0001
 SWP_NOZORDER   = 0x0004
@@ -67,8 +70,8 @@ def center_window(hwnd, settings):
                     SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
                 )
                 time.sleep(delay)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.exception("Failed to center window hwnd=%s", hwnd)
 
 
 def center_active_window(settings):

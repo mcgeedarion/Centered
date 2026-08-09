@@ -25,6 +25,7 @@ EVENT_SYSTEM_FOREGROUND  = 0x0003
 EVENT_OBJECT_CREATE      = 0x8000
 EVENT_SYSTEM_MINIMIZEEND = 0x0017
 WINEVENT_OUTOFCONTEXT    = 0x0000
+WM_QUIT                   = 0x0012
 
 
 class WindowObserver:
@@ -33,6 +34,7 @@ class WindowObserver:
         self._callback = on_window_event
         self._hooks = []
         self._proc = WinEventProc(self._on_event)  # must keep reference alive
+        self._thread_id = None
         self._thread = threading.Thread(target=self._start, daemon=True)
         self._thread.start()
 
@@ -52,6 +54,7 @@ class WindowObserver:
 
     def _start(self):
         user32 = ctypes.windll.user32
+        self._thread_id = ctypes.windll.kernel32.GetCurrentThreadId()
         for evt in (
             EVENT_SYSTEM_FOREGROUND,
             EVENT_OBJECT_CREATE,
@@ -70,3 +73,7 @@ class WindowObserver:
         for h in self._hooks:
             ctypes.windll.user32.UnhookWinEvent(h)
         self._hooks.clear()
+
+        if self._thread_id is not None:
+            ctypes.windll.user32.PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
+            self._thread.join(timeout=1.0)
