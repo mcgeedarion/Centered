@@ -29,14 +29,25 @@ private final class ObserverBox {
         self.owner      = owner
     }
 
-    static func retain(_ observer: AXObserver, owner: WindowObserver) -> UnsafeMutableRawPointer {
-        let box = ObserverBox(observer, owner: owner)
+    /// Creates a +1-retained ObserverBox and returns the opaque pointer
+    /// that must later be passed to releasePtr(_:) to balance the retain.
+    static func retainedPtr(_ axObserver: AXObserver, owner: WindowObserver) -> UnsafeMutableRawPointer {
+        let box = ObserverBox(axObserver, owner: owner)
         return Unmanaged.passRetained(box).toOpaque()
     }
 
-    static func release(_ box: ObserverBox) {
-        _ = Unmanaged<ObserverBox>.passUnretained(box).takeRetainedValue()
+    /// Releases the +1 retain that was created by retainedPtr(_:owner:).
+    /// Must be called with the exact pointer returned by retainedPtr.
+    static func releasePtr(_ ptr: UnsafeMutableRawPointer) {
+        Unmanaged<ObserverBox>.fromOpaque(ptr).release()
     }
+}
+
+/// Bookkeeping entry stored per observed PID.
+private struct ObserverEntry {
+    let box: ObserverBox
+    /// The raw +1-retained pointer passed as refcon; must be released via ObserverBox.releasePtr.
+    let refconPtr: UnsafeMutableRawPointer
 }
 
 @MainActor
@@ -45,7 +56,7 @@ final class WindowObserver {
     var onWindowEvent: ((AXUIElement) -> Void)?
     var excludedBundleIDs: Set<String> = []
 
-    private var boxes       = [pid_t: ObserverBox]()
+    private var entries     = [pid_t: ObserverEntry]()
     private var bundleIDs   = [pid_t: String]()
     private var isObserving = false
     private var pendingRetry = [pid_t: Int]()
@@ -84,12 +95,12 @@ final class WindowObserver {
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        // Clean up AX observers
-        boxes.values.forEach { box in
-            removeRunLoopSource(for: box.axObserver)
-            ObserverBox.release(box)
+        // Clean up AX observers, releasing the +1 refcon retain for each.
+        for entry in entries.values {
+            removeRunLoopSource(for: entry.box.axObserver)
+            ObserverBox.releasePtr(entry.refconPtr)
         }
-        boxes.removeAll()
+        entries.removeAll()
         bundleIDs.removeAll()
         
         logger.debug("WindowObserver stopped")
@@ -113,7 +124,7 @@ final class WindowObserver {
     }
 
     private func addObserver(forPID pid: pid_t, bundleID: String?) {
-        guard boxes[pid] == nil else { return }
+        guard entries[pid] == nil else { return }
         if let bundleID {
             bundleIDs[pid] = bundleID
         }
@@ -127,7 +138,8 @@ final class WindowObserver {
             return
         }
 
-        let refcon = ObserverBox.retain(axObserver, owner: self)
+        // Create the +1-retained refcon pointer. Must be balanced by releasePtr in removeObserver/stop.
+        let refconPtr = ObserverBox.retainedPtr(axObserver, owner: self)
 
         let appElement = AXUIElementCreateApplication(pid)
         let notificationNames = [
@@ -137,25 +149,27 @@ final class WindowObserver {
         ]
         
         for name in notificationNames {
-            let result = AXObserverAddNotification(axObserver, appElement, name as CFString, refcon)
+            let result = AXObserverAddNotification(axObserver, appElement, name as CFString, refconPtr)
             if result != .success {
                 logger.debug("Failed to register notification \(name as String, privacy: .public) for PID \(pid, privacy: .public): result=\(result.rawValue)")
             }
         }
 
         addRunLoopSource(for: axObserver)
-        let box       = Unmanaged<ObserverBox>.fromOpaque(refcon).takeUnretainedValue()
-        boxes[pid]    = box
+
+        let box = Unmanaged<ObserverBox>.fromOpaque(refconPtr).takeUnretainedValue()
+        entries[pid]  = ObserverEntry(box: box, refconPtr: refconPtr)
         pendingRetry.removeValue(forKey: pid)
         
         logger.debug("Observer added for PID \(pid, privacy: .public) (\(bundleID ?? "unknown", privacy: .public))")
     }
 
     private func removeObserver(for pid: pid_t) {
-        guard let box = boxes.removeValue(forKey: pid) else { return }
+        guard let entry = entries.removeValue(forKey: pid) else { return }
         bundleIDs.removeValue(forKey: pid)
-        removeRunLoopSource(for: box.axObserver)
-        ObserverBox.release(box)
+        removeRunLoopSource(for: entry.box.axObserver)
+        // Balance the +1 retain created in addObserver.
+        ObserverBox.releasePtr(entry.refconPtr)
         
         logger.debug("Observer removed for PID \(pid, privacy: .public)")
     }
@@ -225,8 +239,8 @@ final class WindowObserver {
 /// Accessibility callback that receives window events from AX notifications.
 ///
 /// **Callback Context:**
-/// - refcon is a +1 retained ObserverBox. The callback reaches WindowObserver
-///   through the box's weak `owner` reference.
+/// - refcon is a +1 retained ObserverBox (via ObserverBox.retainedPtr). The callback
+///   reaches WindowObserver through the box's weak `owner` reference.
 /// - Dispatches event handling to the main thread to ensure thread safety.
 private let axObserverCallback: AXObserverCallback = { _, element, notificationName, refcon in
     guard let refcon, CFGetTypeID(element) == AXUIElementGetTypeID() else { 
