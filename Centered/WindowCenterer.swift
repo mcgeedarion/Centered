@@ -189,11 +189,13 @@ final class WindowCenterer {
     }
 
     private func performCenter(window: AXWindow) {
-        // Check and atomically update animation tokens to prevent race condition
-        if let token = animationTokens[window], !token.isCancelled {
-            return
+        // Cancel any in-progress animation for this window so the new event
+        // always produces a fresh centering pass rather than being silently dropped.
+        if let existing = animationTokens[window] {
+            existing.cancel()
+            animationTokens.removeValue(forKey: window)
         }
-        
+
         if !centerViaAX(window: window),
            let app = NSWorkspace.shared.frontmostApplication {
             AppleScriptCenterer.centerFrontmostWindow(of: app)
