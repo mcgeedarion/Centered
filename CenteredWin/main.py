@@ -91,9 +91,11 @@ class CenteredApp:
         ]
         text = "\n".join(lines)
         win32clipboard.OpenClipboard()
-        win32clipboard.EmptyClipboard()
-        win32clipboard.SetClipboardText(text)
-        win32clipboard.CloseClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text)
+        finally:
+            win32clipboard.CloseClipboard()
 
     def _quit(self, icon, item):
         self.observer.stop()

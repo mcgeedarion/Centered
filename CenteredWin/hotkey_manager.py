@@ -27,8 +27,17 @@ VK_MAP = {
 
 
 def _parse_hotkey(s: str) -> Tuple[int, int]:
+    """Parse a hotkey string into modifiers and virtual key code.
+    
+    Args:
+        s: Hotkey string like "Ctrl+Alt+C" or "Shift+Win+A"
+        
+    Returns:
+        Tuple of (modifiers, vk_code). Returns (0, 0) if invalid.
+    """
     mods, vk = 0, 0
-    for part in s.split("+"):
+    parts = s.split("+")
+    for part in parts:
         p = part.strip().upper()
         if p in ("CTRL", "CONTROL"):
             mods |= MOD_CONTROL
@@ -41,6 +50,48 @@ def _parse_hotkey(s: str) -> Tuple[int, int]:
         else:
             vk = VK_MAP.get(p, 0)
     return mods, vk
+
+
+def validate_hotkey_string(s: str) -> bool:
+    """Validate a hotkey string format.
+    
+    A valid hotkey must have:
+    - At least one modifier (Ctrl, Alt, Shift, Win)
+    - Exactly one key (A-Z)
+    - Parts separated by '+'
+    
+    Args:
+        s: Hotkey string to validate
+        
+    Returns:
+        True if valid, False otherwise
+    """
+    if not s or not isinstance(s, str):
+        return False
+    
+    parts = s.split("+")
+    if len(parts) < 2:
+        return False
+    
+    has_modifier = False
+    has_key = False
+    
+    for part in parts:
+        p = part.strip().upper()
+        if not p:
+            return False
+        if p in ("CTRL", "CONTROL", "ALT", "SHIFT", "WIN"):
+            has_modifier = True
+        elif p in VK_MAP:
+            if has_key:
+                # Multiple keys specified
+                return False
+            has_key = True
+        else:
+            # Invalid part
+            return False
+    
+    return has_modifier and has_key
 
 
 class _MessageThreadCommand:

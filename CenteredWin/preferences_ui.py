@@ -1,6 +1,7 @@
 import tkinter as tk
-from tkinter import ttk, simpledialog
+from tkinter import ttk, simpledialog, messagebox
 import win32api
+from hotkey_manager import validate_hotkey_string
 
 
 class PreferencesWindow:
@@ -95,9 +96,31 @@ class PreferencesWindow:
 
     def _save(self):
         s = self._settings
+        active_hk = self._active_hk.get()
+        all_hk = self._all_hk.get()
+        
+        # Validate hotkeys before saving
+        if not validate_hotkey_string(active_hk):
+            messagebox.showerror(
+                "Invalid Hotkey",
+                f"Active window hotkey '{active_hk}' is invalid.\n"
+                "Must have at least one modifier (Ctrl/Alt/Shift/Win) and one key (A-Z).",
+                parent=self._root
+            )
+            return
+        
+        if not validate_hotkey_string(all_hk):
+            messagebox.showerror(
+                "Invalid Hotkey",
+                f"Center all hotkey '{all_hk}' is invalid.\n"
+                "Must have at least one modifier (Ctrl/Alt/Shift/Win) and one key (A-Z).",
+                parent=self._root
+            )
+            return
+        
         s.auto_center_enabled      = self._auto.get()
-        s.center_active_hotkey     = self._active_hk.get()
-        s.center_all_hotkey        = self._all_hk.get()
+        s.center_active_hotkey     = active_hk
+        s.center_all_hotkey        = all_hk
         s.animation_style          = self._anim.get()
         s.center_on_window_display = self._follow.get()
         s.fixed_display_name       = self._display.get()
