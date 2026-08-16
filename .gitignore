@@ -1,6 +1,1 @@
-```
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-```
+Nothing should be ignored since the changes only involve source code files (.py) and test files, with no build artifacts, dependencies, or temporary files present in the change list.
