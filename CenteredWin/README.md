@@ -1,8 +1,20 @@
-# Centered for Windows (Python Port)
+# CenteredWin
 
-A lightweight Python port of [Centered](https://github.com/mcgeedarion/Centered) — the macOS window auto-centering utility — reimplemented for Windows using native Win32 APIs.
+**This directory previously contained a Python port of Centered for Windows. The Python files have been removed.**
 
-## Features
+The Windows implementation is no longer maintained in this repository. The original macOS version remains fully supported.
+
+For Windows alternatives, consider:
+- Using the macOS version via virtualization
+- Native Windows window management tools like PowerToys FancyZones
+
+---
+
+## Original Project Information
+
+This was a lightweight Python port of [Centered](https://github.com/mcgeedarion/Centered) — the macOS window auto-centering utility — reimplemented for Windows using native Win32 APIs.
+
+### Features (Historical Reference)
 
 - **Auto-center** — every new or focused window slides to the center of the screen
 - **Ease-out animation** — cubic ease-out curve (Instant / Subtle / Smooth)
@@ -11,73 +23,13 @@ A lightweight Python port of [Centered](https://github.com/mcgeedarion/Centered)
 - **Customizable hotkeys** — remap both shortcuts from the Preferences window
 - **Per-process exclusion list** — exclude any app by process name
 - **Pause Auto-Centering** — temporarily stop automatic moves
-- **Multi-screen support** — center on the window's current display, or pick a fixed display
+- **Multi-screen-support** — center on the window's current display, or pick a fixed display
 - **Animation controls** — choose Instant, Subtle, or Smooth motion from the tray menu
 - **Diagnostics** — copy a settings/hotkey summary to the clipboard
 - **Launch at Login** — register/unregister via the Windows Registry
 - **JSON settings** — stored in `%APPDATA%\CenteredWin\settings.json`
 
-## Requirements
-
-- Windows 10 or later
-- Python 3.10+
-
-## Installation
-
-```bash
-git clone https://github.com/mcgeedarion/Centered.git
-cd Centered/CenteredWin
-pip install -r requirements.txt
-```
-
-## Running
-
-```bash
-# With a console window (development)
-python main.py
-
-# Without a console window (normal use)
-pythonw main.py
-```
-
-## Building a Standalone .exe
-
-From the repository root on Windows:
-
-```bat
-.\CenteredWin\build.cmd
-```
-
-Or from this directory:
-
-```bat
-.\build.cmd
-```
-
-The build creates or reuses `CenteredWin\.venv-build`, installs the runtime and build dependencies, and writes `CenteredWin\dist\CenteredWin.exe`.
-
-Use `-Clean` to remove the previous `build` and `dist` folders before packaging:
-
-```bat
-.\build.cmd -Clean
-```
-
-To force a specific Python install, pass `-Python`:
-
-```bat
-.\build.cmd -Python C:\Path\To\python.exe
-```
-
-## Hotkey Defaults
-
-| Action | Default |
-|---|---|
-| Center Active Window | `Ctrl+Alt+C` |
-| Center All Windows | `Ctrl+Shift+C` |
-
-All hotkeys can be customized from **Preferences** in the tray menu.
-
-## Architecture
+### Architecture (Historical Reference)
 
 | File | Responsibility |
 |---|---|
@@ -88,7 +40,7 @@ All hotkeys can be customized from **Preferences** in the tray menu.
 | `preferences_ui.py` | Tkinter preferences window |
 | `settings.py` | JSON settings load/save, registry login-item management |
 
-## Windows API Mapping
+### Windows API Mapping (Historical Reference)
 
 | macOS (Original) | Windows (This Port) |
 |---|---|

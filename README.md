@@ -13,7 +13,7 @@ A lightweight, zero-dependency macOS menu-bar utility that automatically centers
 - [Permissions & Security](#permissions--security)
 - [Architecture](#architecture)
 - [Troubleshooting](#troubleshooting)
-- [Development](#development)
+- [Release Checklist](#release-checklist)
 - [License](#license)
 
 ## Features
@@ -185,43 +185,6 @@ If Centered causes windows to freeze or the app crashes:
 1. Force quit Centered: `⌘⌥Esc` → select Centered → **Force Quit**
 2. Restart the app
 3. [File a bug report](https://github.com/mcgeedarion/Centered/issues) with details about which app(s) triggered the issue
-
-## Development
-
-### Building
-
-```bash
-git clone https://github.com/mcgeedarion/Centered.git
-cd Centered
-open Centered/Centered.xcodeproj
-```
-
-Build with `⌘B` or run with `⌘R` in Xcode.
-
-### Code Style
-
-- Swift 5 language-mode conventions with Xcode 16 tooling
-- Xcode's default formatting rules
-- Clear, descriptive variable and function names
-
-### Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Test your changes thoroughly (especially with multiple apps and displays)
-4. Submit a pull request with a clear description
-
-### Reporting Bugs
-
-[Open an issue](https://github.com/mcgeedarion/Centered/issues) with:
-
-- macOS version
-- Which app(s) were affected
-- Steps to reproduce
-- Expected vs. actual behavior
-- Centered version (from **About Centered** in the menu)
 
 ## Release Checklist
 
