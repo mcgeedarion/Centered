@@ -76,7 +76,7 @@ final class KeyRecorderField: NSTextField {
     }
 
     private func isEscapeKey(_ keyCode: UInt16) -> Bool {
-        keyCode == 53 // kVK_Escape
+        keyCode == 53
     }
 
     private func cancelRecording() {

@@ -41,7 +41,6 @@ private struct AXWindow: Hashable {
         self.element = element
     }
 
-    // AXUIElement is not Hashable; hash by pid + pointer identity.
     func hash(into hasher: inout Hasher) {
         var pid: pid_t = 0
         AXUIElementGetPid(element, &pid)
@@ -121,10 +120,8 @@ final class WindowCenterer {
     var animationStyle: WindowAnimationStyle = .smooth
     private(set) var isCentering = false
 
-    // Track animation tokens per window so we can cancel/replace cleanly.
     private var animationTokens: [AXWindow: DispatchWorkItem] = [:]
 
-    // Debounce repeated events for the same window.
     private var debounceTokens: [AXWindow: DispatchWorkItem] = [:]
     private let debounceInterval: TimeInterval = 0.03
     
@@ -189,8 +186,6 @@ final class WindowCenterer {
     }
 
     private func performCenter(window: AXWindow) {
-        // Cancel any in-progress animation for this window so the new event
-        // always produces a fresh centering pass rather than being silently dropped.
         if let existing = animationTokens[window] {
             existing.cancel()
             animationTokens.removeValue(forKey: window)
@@ -344,8 +339,6 @@ final class WindowCenterer {
             return screenRects.indices.max { overlapAreas[$0] < overlapAreas[$1] }
         }
 
-        // If a restored or newly-created window reports a frame outside all displays,
-        // choose the nearest display instead of depending on Array.max tie-breaking.
         return screenRects.indices.min {
             screenRects[$0].center.squaredDistance(to: windowFrame.center) <
             screenRects[$1].center.squaredDistance(to: windowFrame.center)

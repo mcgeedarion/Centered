@@ -346,7 +346,6 @@ final class PermissionManager {
     func startPermissionChecks() {
         stopPermissionChecks()
 
-        // Register for CFNotification
         let selfPtr = Unmanaged.passUnretained(self).toOpaque()
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetDistributedCenter(),
@@ -357,7 +356,6 @@ final class PermissionManager {
             .deliverImmediately
         )
 
-        // Start periodic timer
         let timer = Timer(
             timeInterval: Constants.permissionCheckInterval,
             repeats: true
