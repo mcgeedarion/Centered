@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 import winreg
 from dataclasses import dataclass, field
 from typing import List
@@ -19,6 +20,10 @@ class AppSettings:
     launch_at_login: bool = False
     center_on_window_display: bool = True
     fixed_display_name: str = ""
+    
+    def __init__(self, *args, **kwargs):
+        self._lock = threading.Lock()
+        super().__init__(*args, **kwargs)
 
     @staticmethod
     def load() -> "AppSettings":
@@ -30,18 +35,21 @@ class AppSettings:
             return AppSettings()
 
     def save(self):
-        os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
-        with open(SETTINGS_PATH, "w") as f:
-            json.dump(self.__dict__, f, indent=2)
+        with self._lock:
+            os.makedirs(os.path.dirname(SETTINGS_PATH), exist_ok=True)
+            with open(SETTINGS_PATH, "w") as f:
+                json.dump(self.__dict__, f, indent=2)
 
     def set_launch_at_login(self, enable: bool):
         key_path = r"Software\Microsoft\Windows\CurrentVersion\Run"
         exe = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "main.py")
         )
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, key_path, access=winreg.KEY_SET_VALUE
-        ) as key:
+        key = None
+        try:
+            key = winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, key_path, access=winreg.KEY_SET_VALUE
+            )
             if enable:
                 winreg.SetValueEx(
                     key, "CenteredWin", 0, winreg.REG_SZ, f'pythonw "{exe}"'
@@ -51,5 +59,9 @@ class AppSettings:
                     winreg.DeleteValue(key, "CenteredWin")
                 except FileNotFoundError:
                     pass
-        self.launch_at_login = enable
+        finally:
+            if key is not None:
+                key.Close()
+        with self._lock:
+            self.launch_at_login = enable
         self.save()

@@ -1,6 +1,7 @@
 import ctypes
 import ctypes.wintypes
 import threading
+import time
 import win32process
 import win32gui
 
@@ -27,6 +28,50 @@ EVENT_SYSTEM_MINIMIZEEND = 0x0017
 WINEVENT_OUTOFCONTEXT    = 0x0000
 WM_QUIT                   = 0x0012
 
+# Cache for process names: {pid: (name, timestamp)}
+_process_name_cache = {}
+_process_name_cache_lock = threading.Lock()
+_PROCESS_NAME_CACHE_TTL = 60.0  # seconds
+
+
+def _get_process_name_cached(pid: int) -> str:
+    """Get process name with caching to improve performance.
+    
+    Args:
+        pid: Process ID
+        
+    Returns:
+        Process name (without .exe extension) or empty string if not found
+    """
+    current_time = time.time()
+    
+    with _process_name_cache_lock:
+        if pid in _process_name_cache:
+            name, timestamp = _process_name_cache[pid]
+            if current_time - timestamp < _PROCESS_NAME_CACHE_TTL:
+                return name
+    
+    # Cache miss or expired - fetch from psutil
+    try:
+        name = psutil.Process(pid).name().replace(".exe", "").lower()
+        with _process_name_cache_lock:
+            _process_name_cache[pid] = (name, current_time)
+        return name
+    except Exception:
+        return ""
+
+
+def _cleanup_process_cache():
+    """Remove expired entries from the process name cache."""
+    current_time = time.time()
+    with _process_name_cache_lock:
+        expired = [
+            pid for pid, (_, ts) in _process_name_cache.items()
+            if current_time - ts >= _PROCESS_NAME_CACHE_TTL
+        ]
+        for pid in expired:
+            del _process_name_cache[pid]
+
 
 class WindowObserver:
     def __init__(self, settings, on_window_event):
@@ -44,7 +89,9 @@ class WindowObserver:
         if _PSUTIL:
             try:
                 _, pid = win32process.GetWindowThreadProcessId(hwnd)
-                name = psutil.Process(pid).name().replace(".exe", "").lower()
+                name = _get_process_name_cached(pid)
+                if not name:
+                    return
                 excluded = [e.lower() for e in self._settings.excluded_process_names]
                 if name in excluded:
                     return
