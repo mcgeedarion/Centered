@@ -14,8 +14,6 @@ extension UserDefaults {
         static let centersOnWindowScreen = "centersOnWindowScreen"
         static let animationStyle        = "animationStyle"
 
-        // Older builds used Codable blobs with these keys. Keep the names here so
-        // migrations and tests do not need to duplicate magic strings.
         static let legacyCenterActiveBinding = "centerActiveBinding"
         static let legacyCenterAllBinding    = "centerAllBinding"
     }

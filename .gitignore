@@ -1,9 +1,76 @@
 ```
-# Dependencies
-requirements.txt
-requirements-build.txt
-
 # Build artifacts
-build.cmd
-build.ps1
+*.o
+*.obj
+*.a
+*.dylib
+*.so
+*.dll
+*.exe
+*.out
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+*.xcuserstate
+build/
+DerivedData/
+
+# Swift
+.swiftpm/
+Packages/
+Package.resolved
+
+# Dependencies
+Pods/
+Carthage/
+vendor/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+*.env.*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Coverage
+.coverage
+coverage/
+htmlcov/
+
+# Archives
+*.zip
+*.gz
+*.tar
+*.tgz
+*.bz2
+*.xz
+*.7z
+*.rar
+*.zst
+*.lz4
+*.lzh
+*.cab
+*.arj
+*.rpm
+*.deb
+*.Z
+*.lz
+*.lzo
+*.tar.gz
+*.tar.bz2
+*.tar.xz
+*.tar.zst
 ```

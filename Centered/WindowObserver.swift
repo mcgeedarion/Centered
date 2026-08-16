@@ -10,16 +10,7 @@ private let logger = Logger(
     category: "WindowObserver"
 )
 
-/// Sole retained object in the AX callback refcon.
-/// Holds a **weak** back-reference so the callback can reach WindowObserver
-/// without preventing its deallocation.
-///
-/// **Memory Safety:**
-/// This weak reference avoids a retain cycle:
-/// - ObserverBox is retained by Unmanaged (via refcon in the AX callback)
-/// - AXObserver is retained by ObserverBox (strong)
-/// - WindowObserver retains boxes dict containing ObserverBox instances
-/// Without the weak reference, this would create: WindowObserver → boxes → ObserverBox → WindowObserver
+/// Holds a weak back-reference so the callback can reach WindowObserver without preventing its deallocation.
 private final class ObserverBox {
     let axObserver: AXObserver
     weak var owner: WindowObserver?
@@ -29,15 +20,13 @@ private final class ObserverBox {
         self.owner      = owner
     }
 
-    /// Creates a +1-retained ObserverBox and returns the opaque pointer
-    /// that must later be passed to releasePtr(_:) to balance the retain.
+    /// Creates a +1-retained ObserverBox and returns the opaque pointer for use as refcon.
     static func retainedPtr(_ axObserver: AXObserver, owner: WindowObserver) -> UnsafeMutableRawPointer {
         let box = ObserverBox(axObserver, owner: owner)
         return Unmanaged.passRetained(box).toOpaque()
     }
 
     /// Releases the +1 retain that was created by retainedPtr(_:owner:).
-    /// Must be called with the exact pointer returned by retainedPtr.
     static func releasePtr(_ ptr: UnsafeMutableRawPointer) {
         Unmanaged<ObserverBox>.fromOpaque(ptr).release()
     }
@@ -46,7 +35,6 @@ private final class ObserverBox {
 /// Bookkeeping entry stored per observed PID.
 private struct ObserverEntry {
     let box: ObserverBox
-    /// The raw +1-retained pointer passed as refcon; must be released via ObserverBox.releasePtr.
     let refconPtr: UnsafeMutableRawPointer
 }
 
@@ -85,17 +73,14 @@ final class WindowObserver {
 
         logger.debug("WindowObserver stopping")
 
-        // Clean up retry mechanism first
         retryTimer?.invalidate()
         retryTimer = nil
         pendingRetry.removeAll()
 
-        // Unregister workspace notifications
         let nc = NSWorkspace.shared.notificationCenter
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
         nc.removeObserver(self, name: NSWorkspace.didTerminateApplicationNotification, object: nil)
 
-        // Clean up AX observers, releasing the +1 refcon retain for each.
         for entry in entries.values {
             removeRunLoopSource(for: entry.box.axObserver)
             ObserverBox.releasePtr(entry.refconPtr)
@@ -138,7 +123,6 @@ final class WindowObserver {
             return
         }
 
-        // Create the +1-retained refcon pointer. Must be balanced by releasePtr in removeObserver/stop.
         let refconPtr = ObserverBox.retainedPtr(axObserver, owner: self)
 
         let appElement = AXUIElementCreateApplication(pid)
@@ -168,7 +152,6 @@ final class WindowObserver {
         guard let entry = entries.removeValue(forKey: pid) else { return }
         bundleIDs.removeValue(forKey: pid)
         removeRunLoopSource(for: entry.box.axObserver)
-        // Balance the +1 retain created in addObserver.
         ObserverBox.releasePtr(entry.refconPtr)
         
         logger.debug("Observer removed for PID \(pid, privacy: .public)")
@@ -204,8 +187,6 @@ final class WindowObserver {
             let appElement = AXUIElementCreateApplication(pid)
             var appPID: pid_t = 0
             let result = AXUIElementGetPid(appElement, &appPID)
-            
-            // Verify the PID is still valid; if it changed or is invalid, clean it up
             guard result == .success, appPID == pid else {
                 logger.debug("PID validation failed for \(pid, privacy: .public) (result=\(result.rawValue))")
                 pendingRetry.removeValue(forKey: pid)
@@ -236,12 +217,6 @@ final class WindowObserver {
     }
 }
 
-/// Accessibility callback that receives window events from AX notifications.
-///
-/// **Callback Context:**
-/// - refcon is a +1 retained ObserverBox (via ObserverBox.retainedPtr). The callback
-///   reaches WindowObserver through the box's weak `owner` reference.
-/// - Dispatches event handling to the main thread to ensure thread safety.
 private let axObserverCallback: AXObserverCallback = { _, element, notificationName, refcon in
     guard let refcon, CFGetTypeID(element) == AXUIElementGetTypeID() else { 
         return 
