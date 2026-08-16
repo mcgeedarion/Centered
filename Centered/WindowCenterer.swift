@@ -177,6 +177,27 @@ final class WindowCenterer {
         }
     }
 
+    func moveFrontmostWindow(toScreenIndex index: Int) {
+        guard !isPaused, let app = NSWorkspace.shared.frontmostApplication else { return }
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        let screens = NSScreen.screens
+
+        guard index >= 0 && index < screens.count else { return }
+
+        if let win = axFocusedWindow(in: el) ?? axWindows(el)?.first {
+            moveWindowToScreen(win, to: screens[index])
+        } else {
+            // Fallback to AppleScript if AX fails
+            AppleScriptCenterer.moveFrontmostWindow(toScreenIndex: index, of: app)
+        }
+    }
+
+    private func moveWindowToScreen(_ window: AXWindow, to screen: NSScreen) {
+        guard let size = window.size else { return }
+        let targetOrigin = CGPoint.centeredOrigin(of: size, in: screen.visibleFrame)
+        window.setPosition(targetOrigin)
+    }
+
     func cancelAnimation() {
         animationTokens.values.forEach { $0.cancel() }
         animationTokens.removeAll()

@@ -25,8 +25,12 @@ struct HotKeyBinding: Equatable, Codable {
     var keyCode:   UInt16
     var modifiers: NSEvent.ModifierFlags
 
-    static let centerActive = HotKeyBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .option])
-    static let centerAll    = HotKeyBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .shift])
+    static let centerActive      = HotKeyBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .option])
+    static let centerAll         = HotKeyBinding(keyCode: UInt16(kVK_ANSI_C), modifiers: [.command, .shift])
+    static let moveToScreen1     = HotKeyBinding(keyCode: UInt16(kVK_ANSI_1), modifiers: [.command, .shift])
+    static let moveToScreen2     = HotKeyBinding(keyCode: UInt16(kVK_ANSI_2), modifiers: [.command, .shift])
+    static let moveToScreen3     = HotKeyBinding(keyCode: UInt16(kVK_ANSI_3), modifiers: [.command, .shift])
+    static let moveToScreen4     = HotKeyBinding(keyCode: UInt16(kVK_ANSI_4), modifiers: [.command, .shift])
 
     var dictionaryRepresentation: [String: Any] {
         ["keyCode": Int(keyCode), "modifiers": modifiers.rawValue]

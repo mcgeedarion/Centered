@@ -121,4 +121,69 @@ struct AppleScriptCenterer {
             )
         }
     }
+
+    /// Moves the frontmost window of the given application to a specific screen index using AppleScript.
+    /// - Parameters:
+    ///   - app: The running application whose window should be moved
+    ///   - screenIndex: The index of the target screen (0-based)
+    static func moveFrontmostWindow(toScreenIndex screenIndex: Int, of app: NSRunningApplication) {
+        guard let bundleID = app.bundleIdentifier else {
+            appleScriptLogger.debug("AppleScript fallback skipped: no bundle ID for pid \(app.processIdentifier)")
+            return
+        }
+        executeMoveToScreen(bundleID: bundleID, app: app, screenIndex: screenIndex)
+    }
+
+    /// Executes the move-to-screen operation after validating the bundle ID and process.
+    /// - Parameters:
+    ///   - bundleID: The validated bundle identifier
+    ///   - app: The running application to verify and move
+    ///   - screenIndex: The index of the target screen
+    private static func executeMoveToScreen(bundleID: String, app: NSRunningApplication, screenIndex: Int) {
+        guard validateBundleID(bundleID, app: app) else {
+            return
+        }
+
+        let script = generateMoveToScreenScript(bundleID: bundleID, screenIndex: screenIndex)
+        appleScriptQueue.async {
+            executeAppleScript(script, bundleID: bundleID)
+        }
+    }
+
+    /// Generates the AppleScript code for moving a window to a specific screen.
+    /// - Parameters:
+    ///   - bundleID: The bundle identifier of the target application
+    ///   - screenIndex: The index of the target screen (0-based)
+    /// - Returns: The complete AppleScript as a string
+    private static func generateMoveToScreenScript(bundleID: String, screenIndex: Int) -> String {
+        """
+        tell application id "\(bundleID)"
+            activate
+            try
+                set win to front window
+                set winBounds to bounds of win
+                tell application "System Events"
+                    set screenCount to count of desktops
+                    if screenIndex < 1 or screenIndex > screenCount then return
+                    set targetDesktop to desktop screenIndex
+                    tell targetDesktop
+                        set screenBounds to bounds
+                    end tell
+                end tell
+                set winWidth  to item 3 of winBounds - item 1 of winBounds
+                set winHeight to item 4 of winBounds - item 2 of winBounds
+                set screenWidth  to item 3 of screenBounds
+                set screenHeight to item 4 of screenBounds
+                set newX to (item 1 of screenBounds) + (screenWidth  - winWidth)  / 2
+                set newY to (item 2 of screenBounds) + (screenHeight - winHeight) / 2
+                try
+                    set bounds of win to {newX, newY, newX + winWidth, newY + winHeight} with animation
+                on error
+                    set position of win to {newX, newY}
+                    set size     of win to {winWidth, winHeight}
+                end try
+            end try
+        end tell
+        """.replacingOccurrences(of: "screenIndex", with: "\(screenIndex + 1)")
+    }
 }

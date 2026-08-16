@@ -72,6 +72,7 @@ protocol AppCoordinating: AnyObject {
 
     func centerActiveWindowManually()
     func centerAllWindowsManually()
+    func moveWindowToScreen(index: Int)
     func openPreferencesWindow()
     func recheckPermissions()
     func copyDiagnostics()
@@ -443,6 +444,38 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         }
     )
 
+    private lazy var moveToScreen1HotKey: HotKey = makeHotKey(
+        binding: .moveToScreen1,
+        action: { [weak self] in
+            self?.moveWindowToScreen(index: 0)
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    )
+
+    private lazy var moveToScreen2HotKey: HotKey = makeHotKey(
+        binding: .moveToScreen2,
+        action: { [weak self] in
+            self?.moveWindowToScreen(index: 1)
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    )
+
+    private lazy var moveToScreen3HotKey: HotKey = makeHotKey(
+        binding: .moveToScreen3,
+        action: { [weak self] in
+            self?.moveWindowToScreen(index: 2)
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    )
+
+    private lazy var moveToScreen4HotKey: HotKey = makeHotKey(
+        binding: .moveToScreen4,
+        action: { [weak self] in
+            self?.moveWindowToScreen(index: 3)
+            NotificationCenter.default.post(name: .hotkeyPressed, object: nil)
+        }
+    )
+
     init(
         settings: Settings,
         windowCenterer: WindowCenterer,
@@ -594,6 +627,11 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         runIgnoringPause { centerer.centerAllWindows() }
     }
 
+    func moveWindowToScreen(index: Int) {
+        guard isEnabled else { return }
+        runIgnoringPause { centerer.moveFrontmostWindow(toScreenIndex: index) }
+    }
+
     // MARK: - Private Methods
 
     private func rebind(
@@ -711,6 +749,10 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         do {
             try hotKey.activate()
             try allWindowsHotKey.activate()
+            try moveToScreen1HotKey.activate()
+            try moveToScreen2HotKey.activate()
+            try moveToScreen3HotKey.activate()
+            try moveToScreen4HotKey.activate()
         } catch {
             logger.error("Hot key activation failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -727,6 +769,10 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         observer.stop()
         hotKey.deactivate()
         allWindowsHotKey.deactivate()
+        moveToScreen1HotKey.deactivate()
+        moveToScreen2HotKey.deactivate()
+        moveToScreen3HotKey.deactivate()
+        moveToScreen4HotKey.deactivate()
         centerer.cancelAnimation()
         permissionManager?.stopPermissionChecks()
         updateStatusAppearance()
