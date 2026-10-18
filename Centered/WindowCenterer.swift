@@ -165,7 +165,7 @@ final class WindowCenterer {
         let el = AXUIElementCreateApplication(app.processIdentifier)
 
         guard let windows = axWindows(el), !windows.isEmpty else {
-            AppleScriptCenterer.centerFrontmostWindow(of: app, in: fallbackScreenFrame())
+            AppleScriptCenterer.centerAllWindows(of: app, in: fallbackScreenFrame())
             return
         }
 
