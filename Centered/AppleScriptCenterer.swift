@@ -78,7 +78,7 @@ struct AppleScriptCenterer {
     /// Generates the AppleScript code for centering a window.
     /// - Parameter bundleID: The bundle identifier of the target application
     /// - Returns: The complete AppleScript as a string
-    private static func generateCenteringScript(bundleID: String, screenFrame: CGRect?) -> String {
+    static func generateCenteringScript(bundleID: String, screenFrame: CGRect?) -> String {
         let screenBoundsSetup: String
         if let frame = screenFrame {
             screenBoundsSetup = "set screenBounds to {\(frame.minX), \(frame.minY), \(frame.maxX), \(frame.maxY)}"
