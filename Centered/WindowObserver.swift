@@ -200,7 +200,7 @@ final class WindowObserver {
 
     private func addRunLoopSource(for observer: AXObserver) {
         CFRunLoopAddSource(CFRunLoopGetMain(),
-                           AXObserverGetRunLoopSource(observer), .defaultMode)
+                           AXObserverGetRunLoopSource(observer), .commonModes)
     }
 
     private func removeRunLoopSource(for observer: AXObserver) {
@@ -208,12 +208,46 @@ final class WindowObserver {
                               AXObserverGetRunLoopSource(observer), .defaultMode)
     }
 
-    func handleWindowEvent(pid: pid_t, element: AXUIElement) {
-        if let id = bundleIDs[pid], excludedBundleIDs.contains(id) { 
-            logger.debug("Window event ignored (excluded): \(id, privacy: .public)")
-            return 
+    func handleWindowEvent(pid: pid_t, notificationName: String) {
+        if let id = bundleIDs[pid], excludedBundleIDs.contains(id) {
+            logger.debug("Window event ignored (excluded): \\(id, privacy: .public)")
+            return
         }
-        onWindowEvent?(element)
+
+        // App-level AX notifications do not guarantee that the callback element
+        // is the window that changed. Resolve a real window before centering.
+        let appElement = AXUIElementCreateApplication(pid)
+        var raw: AnyObject?
+        if AXUIElementCopyAttributeValue(
+            appElement, kAXFocusedWindowAttribute as CFString, &raw
+        ) == .success,
+           let value = raw,
+           CFGetTypeID(value) == AXUIElementGetTypeID(),
+           let window = value as? AXUIElement {
+            onWindowEvent?(window)
+            return
+        }
+
+        raw = nil
+        if AXUIElementCopyAttributeValue(
+            appElement, kAXWindowsAttribute as CFString, &raw
+        ) == .success,
+           let windows = raw as? [AnyObject] {
+            for object in windows {
+                guard CFGetTypeID(object) == AXUIElementGetTypeID(),
+                      let window = object as? AXUIElement else { continue }
+                var minimizedValue: AnyObject?
+                let minimized = AXUIElementCopyAttributeValue(
+                    window, kAXMinimizedAttribute as CFString, &minimizedValue
+                ) == .success && (minimizedValue as? Bool == true)
+                if !minimized {
+                    onWindowEvent?(window)
+                    return
+                }
+            }
+        }
+
+        logger.debug("No usable window found for AX notification \\(notificationName, privacy: .public)")
     }
 }
 
@@ -233,6 +267,6 @@ private let axObserverCallback: AXObserverCallback = { _, element, notificationN
     
     let box = Unmanaged<ObserverBox>.fromOpaque(refcon).takeUnretainedValue()
     DispatchQueue.main.async { [weak box] in
-        box?.owner?.handleWindowEvent(pid: pid, element: element)
+        box?.owner?.handleWindowEvent(pid: pid, notificationName: name)
     }
 }
