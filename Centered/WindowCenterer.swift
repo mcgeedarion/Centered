@@ -52,6 +52,12 @@ private struct AXWindow: Hashable {
         lhs.element === rhs.element
     }
 
+    var processIdentifier: pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return nil }
+        return pid
+    }
+
     var isValid: Bool {
         var raw: AnyObject?
         let err = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &raw)
@@ -213,7 +219,10 @@ final class WindowCenterer {
         }
 
         if !centerViaAX(window: window),
-           let app = NSWorkspace.shared.frontmostApplication {
+           let pid = window.processIdentifier,
+           let app = NSRunningApplication(processIdentifier: pid) {
+            // Never fall back to whichever app happens to be frontmost now.
+            // The event may have originated from a different application.
             AppleScriptCenterer.centerFrontmostWindow(of: app)
         }
     }
