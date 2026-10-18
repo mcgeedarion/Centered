@@ -97,10 +97,9 @@ private struct AXWindow: Hashable {
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &raw) == .success,
               let value = raw,
-              CFGetTypeID(value) == AXValueGetTypeID(),
-              let axVal = value as? AXValue
+              CFGetTypeID(value) == AXValueGetTypeID()
         else { return nil }
-        return axVal
+        return value as! AXValue
     }
 
     private func getAttribute<T>(_ attribute: String, as type: T.Type) -> T? {
@@ -385,10 +384,9 @@ final class WindowCenterer {
         var raw: AnyObject?
         guard AXUIElementCopyAttributeValue(appElement, kAXFocusedWindowAttribute as CFString, &raw) == .success,
               let value = raw,
-              CFGetTypeID(value) == AXUIElementGetTypeID(),
-              let el = value as? AXUIElement
+              CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
-        return AXWindow(el)
+        return AXWindow(value as! AXUIElement)
     }
 
     private func axWindows(_ el: AXUIElement) -> [AXWindow]? {
@@ -397,9 +395,8 @@ final class WindowCenterer {
               let list = raw as? [AnyObject]
         else { return nil }
         return list.compactMap { obj in
-            guard CFGetTypeID(obj) == AXUIElementGetTypeID(),
-                  let el = obj as? AXUIElement else { return nil }
-            return AXWindow(el)
+            guard CFGetTypeID(obj) == AXUIElementGetTypeID() else { return nil }
+            return AXWindow(obj as! AXUIElement)
         }
     }
 }
