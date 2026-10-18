@@ -445,6 +445,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
     private var permissionManager: PermissionManager?
 
     private(set) var isEnabled = false
+    private var failedHotKeyNames = Set<String>()
 
     private lazy var hotKey: HotKey = makeHotKey(
         binding: settings.centerActiveBinding,
