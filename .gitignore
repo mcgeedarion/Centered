@@ -1,4 +1,4 @@
-```
+
 # Build artifacts
 build/
 dist/
@@ -66,4 +66,7 @@ htmlcov/
 *.tar.bz2
 *.tar.xz
 *.tar.zst
-```
+
+# User-specific Xcode state
+**/xcuserdata/
+*.xcuserstate
