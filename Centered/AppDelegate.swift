@@ -746,15 +746,20 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         }
         observer.excludedBundleIDs = settings.excludedBundleIDs
         observer.start()
-        do {
-            try hotKey.activate()
-            try allWindowsHotKey.activate()
-            try moveToScreen1HotKey.activate()
-            try moveToScreen2HotKey.activate()
-            try moveToScreen3HotKey.activate()
-            try moveToScreen4HotKey.activate()
-        } catch {
-            logger.error("Hot key activation failed: \(error.localizedDescription, privacy: .public)")
+        let hotKeyActivations: [(String, () throws -> Void)] = [
+            ("Center Active Window", { try hotKey.activate() }),
+            ("Center All Windows", { try allWindowsHotKey.activate() }),
+            ("Move to Display 1", { try moveToScreen1HotKey.activate() }),
+            ("Move to Display 2", { try moveToScreen2HotKey.activate() }),
+            ("Move to Display 3", { try moveToScreen3HotKey.activate() }),
+            ("Move to Display 4", { try moveToScreen4HotKey.activate() })
+        ]
+        for (name, activate) in hotKeyActivations {
+            do {
+                try activate()
+            } catch {
+                logger.error("Hot key activation failed for \\(name, privacy: .public): \\(error.localizedDescription, privacy: .public)")
+            }
         }
 
         updateStatusAppearance()
