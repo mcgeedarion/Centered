@@ -25,6 +25,7 @@ enum AppStatus {
     case paused
     case permissionNeeded
     case disabled
+    case hotKeyIssue
 
     var menuTitle: String {
         switch self {
@@ -32,6 +33,7 @@ enum AppStatus {
         case .paused: return "Status: Paused"
         case .permissionNeeded: return "Status: Permission Needed"
         case .disabled: return "Status: Disabled"
+        case .hotKeyIssue: return "Status: Running, some shortcuts unavailable"
         }
     }
 
@@ -41,6 +43,7 @@ enum AppStatus {
         case .paused: return .systemOrange
         case .permissionNeeded: return .systemRed
         case .disabled: return .secondaryLabelColor
+        case .hotKeyIssue: return .systemOrange
         }
     }
 }
@@ -54,6 +57,7 @@ extension Notification.Name {
 
 // MARK: - Protocols
 
+@MainActor
 protocol AppCoordinating: AnyObject {
     var selectedScreen: NSScreen? { get set }
     var launchAtLogin: Bool { get set }
@@ -500,7 +504,6 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             centerer.selectedScreen = newValue
             settings.selectedScreenName = newValue?.localizedName
             rebuildMenuSection(.screens)
-            menuController?.rebuildMenu()
         }
     }
 
@@ -515,7 +518,8 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
     var appStatus: AppStatus {
         if !AccessibilityAuthorization.isTrusted { return .permissionNeeded }
         if isAutoCenteringPaused { return .paused }
-        return isEnabled ? .running : .disabled
+        if !isEnabled { return .disabled }
+        return failedHotKeyNames.isEmpty ? .running : .hotKeyIssue
     }
 
     var isAutoCenteringPaused: Bool {
@@ -740,7 +744,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             return
         }
 
-        isEnabled = true
+        failedHotKeyNames.removeAll()
         observer.onWindowEvent = { [weak self] win in
             self?.centerer.center(window: win)
         }
@@ -758,10 +762,12 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             do {
                 try activate()
             } catch {
+                failedHotKeyNames.insert(name)
                 logger.error("Hot key activation failed for \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
 
+        isEnabled = true
         updateStatusAppearance()
         menuController?.rebuildMenu()
         NotificationCenter.default.post(name: .appStateChanged, object: nil)
@@ -771,6 +777,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
     func disableApp() {
         guard isEnabled else { return }
         isEnabled = false
+        failedHotKeyNames.removeAll()
         observer.stop()
         hotKey.deactivate()
         allWindowsHotKey.deactivate()
