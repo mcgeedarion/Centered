@@ -6,8 +6,8 @@ on:
   pull_request:
 
 jobs:
-  test:
-    name: Build and test
+  test-and-archive:
+    name: Test and release archive smoke test
     runs-on: macos-15
     steps:
       - name: Check out repository
@@ -16,21 +16,10 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
 
-      - name: Build and test
-        run: |
-          xcodebuild \
-            -project Centered.xcodeproj \
-            -scheme Centered \
-            -configuration Debug \
-            -derivedDataPath build/DerivedData \
-            clean test CODE_SIGNING_ALLOWED=NO
+      - name: Run release pipeline without local signing credentials
+        run: CODE_SIGNING_ALLOWED=NO VALIDATE_PRODUCT=NO ./scripts/release_archive.sh
 
-      - name: Release archive smoke test
+      - name: Verify release artifacts
         run: |
-          xcodebuild \
-            -project Centered.xcodeproj \
-            -scheme Centered \
-            -configuration Release \
-            -derivedDataPath build/DerivedData \
-            -archivePath build/Centered.xcarchive \
-            archive CODE_SIGNING_ALLOWED=NO VALIDATE_PRODUCT=NO
+          test -d build/Centered.xcarchive/Products/Applications/Centered.app
+          test -s build/export/Centered.app.zip
