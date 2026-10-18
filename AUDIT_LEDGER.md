@@ -62,7 +62,7 @@
 ### C-06. Centering skips windows whose AXMain attribute is false
 
 - **Severity:** P2, missed windows
-- **File/range:** `Centered/WindowCenterer.swift:164-168`
+- **File/range:** `Centered/WindowCenterer.swift:135-138`
 - **Reproduction:** Focus a secondary/key window in an app that distinguishes its main window from its key window, then trigger auto-centering.
 - **Root cause:** The guard rejects any window where `kAXMainAttribute` is explicitly false. Main-window status and key/focused-window status are different concepts in AppKit, so a focused window can be rejected.
 - **Correction:** Base automatic centering on the actual event/focused window and minimized state. Remove the main-window restriction unless there is a documented product requirement for it.
@@ -98,7 +98,7 @@
 ### C-10. Actor-isolation protocol declarations are not isolated consistently
 
 - **Severity:** P2, future compiler compatibility
-- **File/range:** `Centered/AppDelegate.swift:47-83`, `Centered/AppDelegate.swift:419-422`, and implementations around 497-604
+- **File/range:** `Centered/AppDelegate.swift:57-83`, `Centered/PreferencesWindowController.swift:19-25`, and implementations around `Centered/AppDelegate.swift:419-604`
 - **Evidence:** Current CI build logs contain warnings that main-actor-isolated properties and methods satisfy nonisolated requirements of `AppCoordinating` and `PreferencesHost`. The compiler explicitly says these become errors in Swift 6 language mode.
 - **Reproduction:** Review the current GitHub Actions build log, or compile with Swift 6 language mode after addressing C-01.
 - **Root cause:** The protocols describe AppKit/UI-facing requirements without matching `@MainActor` isolation, while their concrete implementation is main-actor isolated.
@@ -176,7 +176,7 @@
 | `Centered/Centered.entitlements` | Reviewed | App sandbox is explicitly false; entitlements match the documented unsandboxed design. Validate hardened-runtime/notarization behavior during release testing. |
 | `Centered/Info.plist` | Reviewed | No static defect identified in declared app metadata and usage descriptions. |
 | `Centered/HotKey.swift` | Reviewed | C-01. C-10 relates to actor isolation across the coordinator protocols. |
-| `Centered/PreferencesWindowController.swift` | Reviewed | C-13. Also test failed hotkey rebind rollback and preference persistence end-to-end. |
+| `Centered/PreferencesWindowController.swift` | Reviewed | C-10, C-13. Also test failed hotkey rebind rollback and preference persistence end-to-end. |
 | `Centered/Settings.swift` | Reviewed | No direct defect confirmed; reset delegates to defaults and HMAC tag reset. |
 | `Centered/UserDefaults+Centered.swift` | Reviewed | C-09. Keychain failure paths need injectable tests. |
 | `Centered/ViewController.swift` | Reviewed | No direct defect confirmed in notification cleanup or toggle/status update paths. |
