@@ -143,7 +143,7 @@ final class WindowObserver {
                 successfulRegistrations += 1
             } else {
                 failedNames.append(name as String)
-                logger.debug("Failed to register notification \\(name as String, privacy: .public) for PID \\(pid, privacy: .public): result=\\(result.rawValue)")
+                logger.debug("Failed to register notification \(name as String, privacy: .public) for PID \(pid, privacy: .public): result=\(result.rawValue)")
             }
         }
 
@@ -300,7 +300,7 @@ private let axObserverCallback: AXObserverCallback = { _, element, notificationN
     }
     
     let name = notificationName as String? ?? "unknown"
-    logger.debug("AX notification received: \(name ?? "unknown", privacy: .public)")
+    logger.debug("AX notification received: \(name, privacy: .public)")
     
     var pid: pid_t = 0
     guard AXUIElementGetPid(element, &pid) == .success else {
