@@ -266,7 +266,7 @@ private let axObserverCallback: AXObserverCallback = { _, element, notificationN
         return 
     }
     
-    let name = notificationName as String?
+    let name = notificationName as String? ?? "unknown"
     logger.debug("AX notification received: \(name ?? "unknown", privacy: .public)")
     
     var pid: pid_t = 0
