@@ -82,7 +82,7 @@ private struct AXWindow: Hashable {
         if let val = AXValueCreate(.cgPoint, &p) {
             let err = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, val)
             if err != .success {
-                logger.warning("Failed to set window position: \(err)")
+                logger.warning("Failed to set window position, AXError code: \\(err.rawValue)")
             }
         } else {
             logger.warning("Failed to create CGPoint AXValue")
