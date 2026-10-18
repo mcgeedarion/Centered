@@ -302,6 +302,18 @@ struct DefaultSettingsPersistenceTests {
         #expect(settings.centerAllBinding == .centerAll)
     }
 
+    @Test func selectedDisplayIDPersistsAcrossSettingsReload() {
+        let suiteName = "CenteredTests.selectedDisplayIDPersists"
+        let suite = UserDefaults(suiteName: suiteName)!
+        suite.removePersistentDomain(forName: suiteName)
+        var settings = DefaultSettings(defaults: suite)
+        settings.reset()
+
+        settings.selectedScreenID = 0x12345678
+        let reloaded = DefaultSettings(defaults: suite)
+        #expect(reloaded.selectedScreenID == 0x12345678)
+    }
+
     @Test func behaviorSettingsPersist() {
         let suiteName = "CenteredTests.behaviorSettingsPersist"
         let suite = UserDefaults(suiteName: suiteName)!
