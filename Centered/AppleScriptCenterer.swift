@@ -42,6 +42,42 @@ struct AppleScriptCenterer {
     /// - Parameters:
     ///   - bundleID: The validated bundle identifier
     ///   - app: The running application to verify and center
+    static func centerAllWindows(of app: NSRunningApplication, in screenFrame: CGRect? = nil) {
+        guard let bundleID = app.bundleIdentifier, validateBundleID(bundleID, app: app) else { return }
+        let screenBoundsSetup: String
+        if let frame = screenFrame {
+            screenBoundsSetup = "set screenBounds to {\(frame.minX), \(frame.minY), \(frame.maxX), \(frame.maxY)}"
+        } else {
+            screenBoundsSetup = """
+                tell application "System Events" to tell first desktop
+                    set screenBounds to bounds
+                end tell
+                """
+        }
+        let script = """
+        tell application id "\(bundleID)"
+            try
+                \(screenBoundsSetup)
+                set screenLeft to item 1 of screenBounds
+                set screenTop to item 2 of screenBounds
+                set screenWidth to item 3 of screenBounds - screenLeft
+                set screenHeight to item 4 of screenBounds - screenTop
+                repeat with win in windows
+                    try
+                        set winBounds to bounds of win
+                        set winWidth to item 3 of winBounds - item 1 of winBounds
+                        set winHeight to item 4 of winBounds - item 2 of winBounds
+                        set newX to screenLeft + (screenWidth - winWidth) / 2
+                        set newY to screenTop + (screenHeight - winHeight) / 2
+                        set bounds of win to {newX, newY, newX + winWidth, newY + winHeight}
+                    end try
+                end repeat
+            end try
+        end tell
+        """
+        appleScriptQueue.async { executeAppleScript(script, bundleID: bundleID) }
+    }
+
     static func centerWindow(atIndex index: Int, of app: NSRunningApplication, in screenFrame: CGRect? = nil) {
         guard index > 0, let bundleID = app.bundleIdentifier,
               validateBundleID(bundleID, app: app) else { return }
@@ -121,6 +157,31 @@ struct AppleScriptCenterer {
                     set position of win to {newX, newY}
                     set size of win to {winWidth, winHeight}
                 end try
+            end try
+        end tell
+        """
+    }
+
+    static func generateCenterAllWindowsScriptForTesting(bundleID: String, screenFrame: CGRect?) -> String {
+        let screenBoundsSetup: String
+        if let frame = screenFrame {
+            screenBoundsSetup = "set screenBounds to {\(frame.minX), \(frame.minY), \(frame.maxX), \(frame.maxY)}"
+        } else {
+            screenBoundsSetup = """
+                tell application "System Events" to tell first desktop
+                    set screenBounds to bounds
+                end tell
+                """
+        }
+        return """
+        tell application id "\(bundleID)"
+            try
+                \(screenBoundsSetup)
+                repeat with win in windows
+                    try
+                        set winBounds to bounds of win
+                    end try
+                end repeat
             end try
         end tell
         """
