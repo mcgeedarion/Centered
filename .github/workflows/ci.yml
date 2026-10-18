@@ -23,7 +23,7 @@ jobs:
             -scheme Centered \
             -configuration Debug \
             -derivedDataPath build/DerivedData \
-            clean test
+            clean test CODE_SIGNING_ALLOWED=NO
 
       - name: Release archive smoke test
         run: |
