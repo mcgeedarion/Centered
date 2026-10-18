@@ -100,14 +100,11 @@ struct AppleScriptCenterer {
                 """
         }
 
+        let windowTarget = windowIndex.map { "set win to window \($0)" } ?? "set win to front window"
         return """
         tell application id "\(bundleID)"
             try
-                if windowIndex is missing value then
-                    set win to front window
-                else
-                    set win to window windowIndex
-                end if
+                \(windowTarget)
                 set winBounds to bounds of win
                 \(screenBoundsSetup)
                 set screenLeft to item 1 of screenBounds
