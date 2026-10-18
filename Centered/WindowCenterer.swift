@@ -396,7 +396,7 @@ final class WindowCenterer {
         else { return nil }
         return list.compactMap { obj in
             guard CFGetTypeID(obj) == AXUIElementGetTypeID() else { return nil }
-            return AXWindow(obj as! AXUIElement)
+            return AXWindow(unsafeBitCast(obj, to: AXUIElement.self))
         }
     }
 }
