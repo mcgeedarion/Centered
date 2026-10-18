@@ -194,7 +194,7 @@ final class WindowObserver {
         
         if retryTimer == nil {
             let t = Timer(timeInterval: kRetryInterval, repeats: true) { [weak self] _ in
-                self?.retryPending()
+                Task { @MainActor [weak self] in self?.retryPending() }
             }
             RunLoop.main.add(t, forMode: .common)
             retryTimer = t
@@ -288,7 +288,7 @@ final class WindowObserver {
 
         let windows: [AXUIElement] = objects.compactMap { object in
             guard CFGetTypeID(object) == AXUIElementGetTypeID() else { return nil }
-            return object as? AXUIElement
+            return object as! AXUIElement
         }
         let ordered: [AXUIElement]
         if notificationName == (kAXWindowCreatedNotification as String) {
