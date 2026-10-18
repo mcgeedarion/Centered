@@ -288,7 +288,7 @@ final class WindowObserver {
 
         let windows: [AXUIElement] = objects.compactMap { object in
             guard CFGetTypeID(object) == AXUIElementGetTypeID() else { return nil }
-            return object as! AXUIElement
+            return unsafeBitCast(object, to: AXUIElement.self)
         }
         let ordered: [AXUIElement]
         if notificationName == (kAXWindowCreatedNotification as String) {
