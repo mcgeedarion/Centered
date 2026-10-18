@@ -216,3 +216,30 @@ These are optimization candidates, not proven performance defects. Profile befor
 ## Verification boundary
 
 At this revision, GitHub Actions **does not pass**. The build log confirms the C-01 compile error in `HotKey.swift:326`. Static findings C-02 through C-16 still require their listed regression tests. No claim is made that multi-monitor behavior, Accessibility notification semantics, Keychain failure handling, or app focus behavior has been runtime-verified.
+
+## Remediation status, 2026-10-18
+
+The following changes are committed to `main`. CI passed for source revision `3f99616c084ed555d9297338cc2b1956f60360e0`, including the Debug test suite and the release archive/ZIP smoke test: [GitHub Actions run 39096363448](https://github.com/mcgeedarion/Centered/actions/runs/39096363448).
+
+| Finding | Status | Change and verification |
+|---|---|---|
+| C-01 | Fixed | Carbon callback reads the event identifier synchronously and forwards only scalar values to the main actor. Additional compile blockers exposed by CI were corrected. CI passed. |
+| C-02 | Fixed | Display width and height now subtract the left and top origins. Added nonzero-origin script regression coverage. |
+| C-03 | Fixed | Bulk centering uses per-window indexed fallback when AX positioning fails and has an all-window AppleScript fallback when AX enumeration is unavailable. |
+| C-04 | Fixed | Removed application activation from fallback scripts. Automatic event handling no longer falls back to an unrelated app front window. |
+| C-05 | Addressed | Focus-change events target the focused window; creation events prioritize an unminimized window from the app's window list rather than blindly choosing the prior focused window. |
+| C-06 | Fixed | Removed the AXMain-only filter so valid secondary windows are eligible for centering. |
+| C-07 | Fixed | Shortcut registration failures are tracked and reflected in a degraded status instead of reporting an unqualified running state. |
+| C-08 | Fixed | Failed PID validation removes any registered observer, run-loop source, refcon, and retry metadata consistently. |
+| C-09 | Addressed | Keychain lookup errors no longer generate an ephemeral replacement key; tag and key write failures propagate as failure, and UserDefaults exclusions are not overwritten when persistence fails. |
+| C-10 | Fixed | UI protocols are main-actor isolated; timer callbacks hop to the main actor; nonisolated deinitializers no longer call actor-isolated cleanup; Core Foundation casts and availability checks were corrected. |
+| C-11 | Fixed | Screen and action menu sections update in place rather than rebuilding the entire menu. |
+| C-12 | Fixed | Selected displays persist by Core Graphics display ID, with unique-name fallback for legacy settings. |
+| C-13 | Improved | UI tests now assert app launch/termination behavior instead of only launching or capturing a screenshot. |
+| C-14 | Fixed | Removed tracked user-specific Xcode workspace, breakpoint, and scheme-management files; added ignore rules for `xcuserdata` and `*.xcuserstate`. |
+| C-15 | Fixed | Removed the hard-coded developer team from Xcode build settings. |
+| C-16 | Fixed | CI invokes the release archive script itself and verifies the archive and ZIP outputs, reducing duplicated release logic. |
+
+### Verification limits
+
+CI confirms compilation, the unit/UI test suite, and the unsigned release archive/ZIP path. It does not reproduce physical multi-monitor rearrangements, every application's Accessibility API behavior, real hotkey conflicts, or injected Keychain locked/unavailable/write-failure statuses. Those scenarios still require targeted manual or dependency-injected runtime tests before claiming full runtime validation.
