@@ -298,24 +298,11 @@ final class HotKey {
         }
     }
 
-    func handleCarbonEvent(_ event: EventRef) {
-        guard isActive else { return }
-
-        var firedID = EventHotKeyID()
-        GetEventParameter(
-            event,
-            EventParamName(kEventParamDirectObject),
-            EventParamType(typeEventHotKeyID),
-            nil,
-            MemoryLayout<EventHotKeyID>.size,
-            nil,
-            &firedID
-        )
-
-        guard firedID.signature == hotKeyID.signature,
-              firedID.id        == hotKeyID.id
+    func handleCarbonEvent(_ firedID: EventHotKeyID) {
+        guard isActive,
+              firedID.signature == hotKeyID.signature,
+              firedID.id == hotKeyID.id
         else { return }
-
         keyDownHandler?()
     }
 }
@@ -323,6 +310,24 @@ final class HotKey {
 // MARK: - Carbon Event Handler
 private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
     guard let event, let userData else { return noErr }
-    Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue().handleCarbonEvent(event)
+
+    // Read the borrowed Carbon event synchronously. Never capture EventRef past
+    // this callback's lifetime or call a MainActor-isolated method off-actor.
+    var firedID = EventHotKeyID()
+    let status = GetEventParameter(
+        event,
+        EventParamName(kEventParamDirectObject),
+        EventParamType(typeEventHotKeyID),
+        nil,
+        MemoryLayout<EventHotKeyID>.size,
+        nil,
+        &firedID
+    )
+    guard status == noErr else { return noErr }
+
+    let hotKey = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
+    Task { @MainActor [weak hotKey] in
+        hotKey?.handleCarbonEvent(firedID)
+    }
     return noErr
 }
