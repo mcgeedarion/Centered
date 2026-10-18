@@ -173,7 +173,7 @@ final class MenuController {
         for (index, item) in items.enumerated() { menu.insertItem(item, at: start + index) }
     }
 
-    private func rebuildMenu() {
+    func rebuildMenu() {
         guard let coordinator else { return }
         statusItem?.menu = createMenuState(coordinator: coordinator).buildMenu()
     }
@@ -370,7 +370,7 @@ final class PermissionManager {
             CFNotificationCenterGetDistributedCenter(),
             selfPtr,
             permissionChangedCallback,
-            Constants.accessibilityNotification as CFString,
+            CFNotificationName(rawValue: Constants.accessibilityNotification as CFString),
             nil,
             .deliverImmediately
         )
@@ -379,7 +379,7 @@ final class PermissionManager {
             timeInterval: Constants.permissionCheckInterval,
             repeats: true
         ) { [weak self] _ in
-            self?.performPermissionCheck()
+            Task { @MainActor [weak self] in self?.performPermissionCheck() }
         }
         RunLoop.main.add(timer, forMode: .common)
         permissionTimer = timer
@@ -419,9 +419,6 @@ final class PermissionManager {
         }
     }
 
-    deinit {
-        stopPermissionChecks()
-    }
 }
 
 private let permissionChangedCallback: CFNotificationCallback = { _, observer, _, _, _ in
@@ -505,10 +502,6 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         self.observer = windowObserver
         super.init()
         self.permissionManager = PermissionManager(controller: self)
-    }
-
-    deinit {
-        permissionManager?.stopPermissionChecks()
     }
 
     // MARK: - AppCoordinating Protocol
@@ -779,12 +772,12 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         observer.excludedBundleIDs = settings.excludedBundleIDs
         observer.start()
         let hotKeyActivations: [(String, () throws -> Void)] = [
-            ("Center Active Window", { try hotKey.activate() }),
-            ("Center All Windows", { try allWindowsHotKey.activate() }),
-            ("Move to Display 1", { try moveToScreen1HotKey.activate() }),
-            ("Move to Display 2", { try moveToScreen2HotKey.activate() }),
-            ("Move to Display 3", { try moveToScreen3HotKey.activate() }),
-            ("Move to Display 4", { try moveToScreen4HotKey.activate() })
+            ("Center Active Window", { try self.hotKey.activate() }),
+            ("Center All Windows", { try self.allWindowsHotKey.activate() }),
+            ("Move to Display 1", { try self.moveToScreen1HotKey.activate() }),
+            ("Move to Display 2", { try self.moveToScreen2HotKey.activate() }),
+            ("Move to Display 3", { try self.moveToScreen3HotKey.activate() }),
+            ("Move to Display 4", { try self.moveToScreen4HotKey.activate() })
         ]
         for (name, activate) in hotKeyActivations {
             do {
@@ -876,7 +869,8 @@ struct DiagnosticsSnapshot {
 
 enum LaunchAtLoginService {
     static var isAvailable: Bool {
-        #available(macOS 13, *) ? true : false
+        if #available(macOS 13, *) { return true }
+        return false
     }
 
     static var isEnabled: Bool {
