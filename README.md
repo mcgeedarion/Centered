@@ -146,7 +146,7 @@ Centered is architected as a collection of focused, single-responsibility module
 |---|---|
 | `AppDelegate.swift` | App lifecycle, status-bar menu, pause/display/animation controls, diagnostics, hotkey wiring, AX permission polling |
 | `WindowCenterer.swift` | AX centering logic, display selection, near-full-screen skipping, configurable animation, AppleScript fallback |
-| `WindowObserver.swift` | AXObserver setup, per-app exclusion filtering, explicit retain-counter lifecycle (`selfRetainCount`) |
+| `WindowObserver.swift` | AXObserver setup, per-app exclusion filtering, retained observer-box lifecycle and per-process notification retries |
 | `HotKey.swift` | Carbon global hotkey registration, conflict rollback, display formatting, and runtime rebind support |
 | `PreferencesWindowController.swift` | Preferences UI — hotkey recorder and exclusion list table view |
 | `ViewController.swift` | Menu-bar popover/window toggle switch and status indicator |
