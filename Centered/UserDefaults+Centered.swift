@@ -24,7 +24,7 @@ extension UserDefaults {
             guard let number = object(forKey: Key.selectedScreenID) as? NSNumber else { return nil }
             return UInt32(exactly: number.uint64Value)
         }
-        set { set(newValue.map(NSNumber.init(value:)), forKey: Key.selectedScreenID) }
+        set { set(newValue.map { NSNumber(value: $0) }, forKey: Key.selectedScreenID) }
     }
 
     var selectedScreenName: String? {
