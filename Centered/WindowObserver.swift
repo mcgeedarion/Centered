@@ -46,6 +46,7 @@ final class WindowObserver {
 
     private var entries     = [pid_t: ObserverEntry]()
     private var bundleIDs   = [pid_t: String]()
+    private var missingNotifications = [pid_t: [String]]()
     private var isObserving = false
     private var pendingRetry = [pid_t: Int]()
     private var retryTimer:  Timer?
@@ -76,6 +77,7 @@ final class WindowObserver {
         retryTimer?.invalidate()
         retryTimer = nil
         pendingRetry.removeAll()
+        missingNotifications.removeAll()
 
         let nc = NSWorkspace.shared.notificationCenter
         nc.removeObserver(self, name: NSWorkspace.didLaunchApplicationNotification,    object: nil)
@@ -105,6 +107,7 @@ final class WindowObserver {
         else { return }
         logger.debug("App terminated: PID \(app.processIdentifier)")
         pendingRetry.removeValue(forKey: app.processIdentifier)
+        missingNotifications.removeValue(forKey: app.processIdentifier)
         removeObserver(for: app.processIdentifier)
     }
 
@@ -132,18 +135,21 @@ final class WindowObserver {
             kAXFocusedWindowChangedNotification
         ]
         
-        var registrationFailed = false
+        var failedNames = [String]()
+        var successfulRegistrations = 0
         for name in notificationNames {
             let result = AXObserverAddNotification(axObserver, appElement, name as CFString, refconPtr)
-            if result != .success {
-                registrationFailed = true
-                logger.debug("Failed to register notification \(name as String, privacy: .public) for PID \(pid, privacy: .public): result=\(result.rawValue)")
+            if result == .success {
+                successfulRegistrations += 1
+            } else {
+                failedNames.append(name as String)
+                logger.debug("Failed to register notification \\(name as String, privacy: .public) for PID \\(pid, privacy: .public): result=\\(result.rawValue)")
             }
         }
 
-        guard !registrationFailed else {
-            // Retry the entire observer with a fresh AXObserver. A partial
-            // registration must not be treated as a successful subscription.
+        // Keep any successfully registered notifications active. Retry only the
+        // unsupported/transient registrations instead of discarding all events.
+        guard successfulRegistrations > 0 else {
             ObserverBox.releasePtr(refconPtr)
             scheduleRetry(forPID: pid)
             return
@@ -152,14 +158,21 @@ final class WindowObserver {
         addRunLoopSource(for: axObserver)
 
         let box = Unmanaged<ObserverBox>.fromOpaque(refconPtr).takeUnretainedValue()
-        entries[pid]  = ObserverEntry(box: box, refconPtr: refconPtr)
-        pendingRetry.removeValue(forKey: pid)
+        entries[pid] = ObserverEntry(box: box, refconPtr: refconPtr)
+        if failedNames.isEmpty {
+            pendingRetry.removeValue(forKey: pid)
+            missingNotifications.removeValue(forKey: pid)
+        } else {
+            missingNotifications[pid] = failedNames
+            scheduleRetry(forPID: pid)
+        }
         
         logger.debug("Observer added for PID \(pid, privacy: .public) (\(bundleID ?? "unknown", privacy: .public))")
     }
 
     private func removeObserver(for pid: pid_t) {
         bundleIDs.removeValue(forKey: pid)
+        missingNotifications.removeValue(forKey: pid)
         guard let entry = entries.removeValue(forKey: pid) else { return }
         removeRunLoopSource(for: entry.box.axObserver)
         ObserverBox.releasePtr(entry.refconPtr)
@@ -204,7 +217,27 @@ final class WindowObserver {
                 continue
             }
             
-            addObserver(forPID: appPID, bundleID: bundleIDs[pid])
+            if let entry = entries[pid], let missing = missingNotifications[pid] {
+                let appElement = AXUIElementCreateApplication(appPID)
+                var stillMissing = [String]()
+                for name in missing {
+                    let addResult = AXObserverAddNotification(
+                        entry.box.axObserver, appElement, name as CFString, entry.refconPtr
+                    )
+                    if addResult != .success {
+                        stillMissing.append(name)
+                    }
+                }
+                if stillMissing.isEmpty {
+                    missingNotifications.removeValue(forKey: pid)
+                    pendingRetry.removeValue(forKey: pid)
+                } else {
+                    missingNotifications[pid] = stillMissing
+                    scheduleRetry(forPID: pid)
+                }
+            } else {
+                addObserver(forPID: appPID, bundleID: bundleIDs[pid])
+            }
         }
     }
 
