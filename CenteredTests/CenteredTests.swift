@@ -385,6 +385,16 @@ struct AppleScriptCenteringGeometryTests {
         #expect(!script.contains("activate"))
     }
 
+    @Test func bulkFallbackIteratesEveryWindowWithoutActivatingApp() {
+        let script = AppleScriptCenterer.generateCenterAllWindowsScriptForTesting(
+            bundleID: "com.apple.Safari",
+            screenFrame: CGRect(x: 1920, y: 40, width: 1200, height: 800)
+        )
+        #expect(script.contains("repeat with win in windows"))
+        #expect(script.contains("set screenWidth to item 3 of screenBounds - screenLeft"))
+        #expect(!script.contains("activate"))
+    }
+
     @Test func indexedFallbackTargetsRequestedWindowWithoutActivatingApp() {
         let script = AppleScriptCenterer.generateCenteringScriptForTesting(
             bundleID: "com.apple.Safari",
