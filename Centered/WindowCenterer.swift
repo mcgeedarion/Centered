@@ -36,26 +36,21 @@ private struct AnimationConfig {
 
 private struct AXWindow: Hashable {
     let element: AXUIElement
+    let processIdentifier: pid_t?
 
     init(_ element: AXUIElement) {
         self.element = element
+        var pid: pid_t = 0
+        self.processIdentifier = AXUIElementGetPid(element, &pid) == .success ? pid : nil
     }
 
     func hash(into hasher: inout Hasher) {
-        var pid: pid_t = 0
-        AXUIElementGetPid(element, &pid)
-        hasher.combine(pid)
+        hasher.combine(processIdentifier)
         hasher.combine(Unmanaged.passUnretained(element).toOpaque())
     }
 
     static func == (lhs: AXWindow, rhs: AXWindow) -> Bool {
         lhs.element === rhs.element
-    }
-
-    var processIdentifier: pid_t? {
-        var pid: pid_t = 0
-        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else { return nil }
-        return pid
     }
 
     var isValid: Bool {
