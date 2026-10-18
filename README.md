@@ -46,7 +46,7 @@ Download the latest prebuilt binary from [GitHub Releases](https://github.com/mc
 ```bash
 git clone https://github.com/mcgeedarion/Centered.git
 cd Centered
-open Centered/Centered.xcodeproj
+open Centered.xcodeproj
 ```
 
 Then build and run with `⌘R` in Xcode (or `⌘B` to build only).
