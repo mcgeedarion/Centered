@@ -126,6 +126,18 @@ struct AppleScriptCenterer {
         """
     }
 
+    static func generateCenteringScriptForTesting(
+        bundleID: String,
+        screenFrame: CGRect?,
+        windowIndex: Int?
+    ) -> String {
+        generateCenteringScript(bundleID: bundleID, screenFrame: screenFrame, windowIndex: windowIndex)
+    }
+
+    static func generateMoveToScreenScriptForTesting(bundleID: String, screenIndex: Int) -> String {
+        generateMoveToScreenScript(bundleID: bundleID, screenIndex: screenIndex)
+    }
+
     /// Executes the provided AppleScript and logs any errors that occur.
     /// - Parameters:
     ///   - script: The AppleScript code to execute
