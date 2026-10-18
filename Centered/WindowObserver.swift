@@ -215,7 +215,7 @@ final class WindowObserver {
             guard result == .success, appPID == pid else {
                 logger.debug("PID validation failed for \(pid, privacy: .public) (result=\(result.rawValue))")
                 pendingRetry.removeValue(forKey: pid)
-                bundleIDs.removeValue(forKey: pid)
+                removeObserver(for: pid)
                 continue
             }
             
@@ -259,37 +259,54 @@ final class WindowObserver {
             return
         }
 
-        // App-level AX notifications do not guarantee that the callback element
-        // is the window that changed. Resolve a real window before centering.
         let appElement = AXUIElementCreateApplication(pid)
+        var focusedRaw: AnyObject?
+        let focusedWindow: AXUIElement? = {
+            guard AXUIElementCopyAttributeValue(
+                appElement, kAXFocusedWindowAttribute as CFString, &focusedRaw
+            ) == .success,
+               let value = focusedRaw,
+               CFGetTypeID(value) == AXUIElementGetTypeID()
+            else { return nil }
+            return value as? AXUIElement
+        }()
+
+        // Focus-change events must use the focused window. Creation events
+        // instead select the newest unminimized window from the app's list so
+        // a background-created window does not accidentally move the old focus.
+        if notificationName == (kAXFocusedWindowChangedNotification as String) {
+            if let focusedWindow { onWindowEvent?(focusedWindow); return }
+        }
+
         var raw: AnyObject?
-        if AXUIElementCopyAttributeValue(
-            appElement, kAXFocusedWindowAttribute as CFString, &raw
-        ) == .success,
-           let value = raw,
-           CFGetTypeID(value) == AXUIElementGetTypeID(),
-           let window = value as? AXUIElement {
-            onWindowEvent?(window)
+        guard AXUIElementCopyAttributeValue(
+            appElement, kAXWindowsAttribute as CFString, &raw
+        ) == .success, let objects = raw as? [AnyObject] else {
+            logger.debug("No window list for AX notification \(notificationName, privacy: .public)")
             return
         }
 
-        raw = nil
-        if AXUIElementCopyAttributeValue(
-            appElement, kAXWindowsAttribute as CFString, &raw
-        ) == .success,
-           let windows = raw as? [AnyObject] {
-            for object in windows {
-                guard CFGetTypeID(object) == AXUIElementGetTypeID(),
-                      let window = object as? AXUIElement else { continue }
-                var minimizedValue: AnyObject?
-                let minimized = AXUIElementCopyAttributeValue(
-                    window, kAXMinimizedAttribute as CFString, &minimizedValue
-                ) == .success && (minimizedValue as? Bool == true)
-                if !minimized {
-                    onWindowEvent?(window)
-                    return
-                }
-            }
+        let windows: [AXUIElement] = objects.compactMap { object in
+            guard CFGetTypeID(object) == AXUIElementGetTypeID() else { return nil }
+            return object as? AXUIElement
+        }
+        let ordered: [AXUIElement]
+        if notificationName == (kAXWindowCreatedNotification as String) {
+            ordered = windows.reversed()
+        } else if let focusedWindow {
+            ordered = [focusedWindow] + windows.filter { !CFEqual($0, focusedWindow) }
+        } else {
+            ordered = windows
+        }
+
+        for window in ordered {
+            var minimizedValue: AnyObject?
+            let minimizedStatus = AXUIElementCopyAttributeValue(
+                window, kAXMinimizedAttribute as CFString, &minimizedValue
+            )
+            if minimizedStatus == .success, minimizedValue as? Bool == true { continue }
+            onWindowEvent?(window)
+            return
         }
 
         logger.debug("No usable window found for AX notification \(notificationName, privacy: .public)")
