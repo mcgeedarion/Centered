@@ -7,6 +7,7 @@ extension UserDefaults {
 
     enum Key {
         static let selectedScreenName    = "selectedScreenName"
+        static let selectedScreenID      = "selectedScreenID"
         static let centerActiveHotKey    = "centerActiveHotKey"
         static let centerAllHotKey       = "centerAllHotKey"
         static let excludedBundleIDs     = "excludedBundleIDs"
@@ -16,6 +17,14 @@ extension UserDefaults {
 
         static let legacyCenterActiveBinding = "centerActiveBinding"
         static let legacyCenterAllBinding    = "centerAllBinding"
+    }
+
+    var selectedScreenID: UInt32? {
+        get {
+            guard let number = object(forKey: Key.selectedScreenID) as? NSNumber else { return nil }
+            return UInt32(exactly: number.uint64Value)
+        }
+        set { set(newValue.map(NSNumber.init(value:)), forKey: Key.selectedScreenID) }
     }
 
     var selectedScreenName: String? {
@@ -71,8 +80,11 @@ extension UserDefaults {
         set {
             ExclusionHMAC.hmacQueue.sync(flags: .barrier) {
                 let validIDs = Set(newValue.filter(ExclusionHMAC.isValidBundleID))
+                guard ExclusionHMAC.store(validIDs) else {
+                    os_log("Excluded bundle IDs were not updated because Keychain persistence failed", log: .default, type: .error)
+                    return
+                }
                 set(Array(validIDs.sorted()), forKey: Key.excludedBundleIDs)
-                ExclusionHMAC.store(validIDs)
             }
         }
     }
@@ -159,50 +171,44 @@ enum ExclusionHMAC {
         ids.sorted().joined(separator: "\n").data(using: .utf8) ?? Data()
     }
 
-    private static func hmacKey() -> SymmetricKey {
+    /// Never rotate an existing key after a transient Keychain failure. Doing so
+    /// would make every previously persisted exclusion tag unverifiable.
+    private static func hmacKey() -> SymmetricKey? {
         let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
+            kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: keyAccount,
-            kSecReturnData:  true,
-            kSecMatchLimit:  kSecMatchLimitOne,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne,
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecSuccess,
-           let keyData = result as? Data,
-           keyData.count == 32 {
+        if status == errSecSuccess {
+            guard let keyData = result as? Data, keyData.count == 32 else {
+                os_log("Keychain HMAC key has invalid data", log: .default, type: .error)
+                return nil
+            }
             return SymmetricKey(data: keyData)
+        }
+        guard status == errSecItemNotFound else {
+            os_log("Failed to load HMAC key: %d", log: .default, type: .error, status)
+            return nil
         }
 
         let newKey = SymmetricKey(size: .bits256)
         let keyData = newKey.withUnsafeBytes { Data($0) }
-
-        let storeStatus: OSStatus
-        if status == errSecSuccess {
-            let lookup: [CFString: Any] = [
-                kSecClass:       kSecClassGenericPassword,
-                kSecAttrService: service,
-                kSecAttrAccount: keyAccount,
-            ]
-            let update: [CFString: Any] = [kSecValueData: keyData]
-            storeStatus = SecItemUpdate(lookup as CFDictionary, update as CFDictionary)
-        } else {
-            let attrs: [CFString: Any] = [
-                kSecClass:          kSecClassGenericPassword,
-                kSecAttrService:    service,
-                kSecAttrAccount:    keyAccount,
-                kSecValueData:      keyData,
-                kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-            ]
-            storeStatus = SecItemAdd(attrs as CFDictionary, nil)
+        let attributes: [CFString: Any] = [
+            kSecClass: kSecClassGenericPassword,
+            kSecAttrService: service,
+            kSecAttrAccount: keyAccount,
+            kSecValueData: keyData,
+            kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
+        ]
+        let storeStatus = SecItemAdd(attributes as CFDictionary, nil)
+        guard storeStatus == errSecSuccess else {
+            os_log("Failed to create HMAC key: %d", log: .default, type: .error, storeStatus)
+            return nil
         }
-
-        if storeStatus != errSecSuccess {
-            os_log("Failed to store HMAC key: %d", log: .default, type: .error, storeStatus)
-        }
-
         return newKey
     }
 
@@ -225,7 +231,8 @@ enum ExclusionHMAC {
         return nil
     }
 
-    private static func saveTag(_ tag: Data) {
+    @discardableResult
+    private static func saveTag(_ tag: Data) -> Bool {
         let query: [CFString: Any] = [
             kSecClass:       kSecClassGenericPassword,
             kSecAttrService: service,
@@ -244,26 +251,31 @@ enum ExclusionHMAC {
                 kSecAttrAccessible: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
             ]
             let addStatus = SecItemAdd(attrs as CFDictionary, nil)
-            if addStatus != errSecSuccess {
+            guard addStatus == errSecSuccess else {
                 os_log("Failed to add HMAC tag: %d", log: .default, type: .error, addStatus)
+                return false
             }
+            return true
         } else if updateStatus != errSecSuccess {
             os_log("Failed to update HMAC tag: %d", log: .default, type: .error, updateStatus)
+            return false
         }
+        return true
     }
 
-    static func store(_ ids: Set<String>) {
-        let tag = HMAC<SHA256>.authenticationCode(for: serialise(ids), using: hmacKey())
-        saveTag(Data(tag))
+    @discardableResult
+    static func store(_ ids: Set<String>) -> Bool {
+        guard let key = hmacKey() else { return false }
+        let tag = HMAC<SHA256>.authenticationCode(for: serialise(ids), using: key)
+        return saveTag(Data(tag))
     }
 
     static func verify(_ ids: Set<String>) -> Bool {
-        guard ids.allSatisfy(isValidBundleID) else { return false }
+        guard ids.allSatisfy(isValidBundleID), let key = hmacKey() else { return false }
         guard let storedTag = loadTag() else {
             return ids.isEmpty
         }
 
-        let key = hmacKey()
         if HMAC<SHA256>.isValidAuthenticationCode(storedTag, authenticating: serialise(ids), using: key) {
             return true
         }
