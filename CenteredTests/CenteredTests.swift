@@ -345,3 +345,31 @@ struct DefaultSettingsPersistenceTests {
         #expect(settings.excludedBundleIDs.isEmpty)
     }
 }
+
+
+@Suite("AppleScript centering geometry")
+struct AppleScriptCenteringGeometryTests {
+
+    @Test func explicitScreenFrameUsesVisibleFrameCoordinates() {
+        let frame = CGRect(x: 1920, y: 40, width: 1200, height: 800)
+        let script = AppleScriptCenterer.generateCenteringScript(
+            bundleID: "com.apple.Safari",
+            screenFrame: frame
+        )
+
+        #expect(script.contains("set screenBounds to {1920.0, 40.0, 3120.0, 840.0}"))
+        #expect(script.contains("set newX to screenLeft + (screenWidth - winWidth) / 2"))
+        #expect(script.contains("set newY to screenTop + (screenHeight - winHeight) / 2"))
+        #expect(!script.contains("System Events"))
+    }
+
+    @Test func missingScreenFrameUsesSystemEventsFallback() {
+        let script = AppleScriptCenterer.generateCenteringScript(
+            bundleID: "com.apple.Safari",
+            screenFrame: nil
+        )
+
+        #expect(script.contains("tell application \"System Events\" to tell first desktop"))
+        #expect(script.contains("set screenLeft to item 1 of screenBounds"))
+    }
+}
