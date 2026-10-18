@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="$ROOT_DIR/Centered.xcodeproj"
 SCHEME="Centered"
 CONFIGURATION="Release"
+TEST_CONFIGURATION="${TEST_CONFIGURATION:-Debug}"
 DERIVED_DATA="$ROOT_DIR/build/DerivedData"
 ARCHIVE_PATH="$ROOT_DIR/build/Centered.xcarchive"
 EXPORT_PATH="$ROOT_DIR/build/export"
@@ -21,7 +22,7 @@ mkdir -p "$ROOT_DIR/build"
 xcodebuild \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
-  -configuration "$CONFIGURATION" \
+  -configuration "$TEST_CONFIGURATION" \
   -derivedDataPath "$DERIVED_DATA" \
   clean test CODE_SIGNING_ALLOWED="$SIGNING_ALLOWED"
 
