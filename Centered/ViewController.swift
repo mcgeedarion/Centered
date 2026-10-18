@@ -7,7 +7,6 @@ class ViewController: NSViewController {
         NSApplication.shared.delegate as? AppDelegate
     }()
 
-    private var notificationObservers: [NSObjectProtocol] = []
 
     @IBOutlet weak var toggleSwitch: NSSwitch!
     @IBOutlet weak var statusIndicator: NSImageView!
@@ -18,32 +17,16 @@ class ViewController: NSViewController {
         updateUI()
     }
 
-    deinit {
-        removeNotificationObservers()
-    }
-
     // MARK: - Setup
 
     private func setupNotifications() {
-        let nc = NotificationCenter.default
-        
-        let appStateObserver = nc.addObserver(
-            forName: .appStateChanged,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.updateUI()
-        }
-        
-        let hotkeyObserver = nc.addObserver(
-            forName: .hotkeyPressed,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            self?.updateUI()
-        }
-        
-        notificationObservers = [appStateObserver, hotkeyObserver]
+        let center = NotificationCenter.default
+        center.addObserver(self, selector: #selector(notificationReceived(_:)), name: .appStateChanged, object: nil)
+        center.addObserver(self, selector: #selector(notificationReceived(_:)), name: .hotkeyPressed, object: nil)
+    }
+
+    @objc private func notificationReceived(_ notification: Notification) {
+        updateUI()
     }
 
     // MARK: - Actions
