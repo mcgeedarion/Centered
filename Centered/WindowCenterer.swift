@@ -99,7 +99,7 @@ private struct AXWindow: Hashable {
               let value = raw,
               CFGetTypeID(value) == AXValueGetTypeID()
         else { return nil }
-        return value as! AXValue
+        return unsafeBitCast(value, to: AXValue.self)
     }
 
     private func getAttribute<T>(_ attribute: String, as type: T.Type) -> T? {
