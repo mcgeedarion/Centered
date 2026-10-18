@@ -212,23 +212,30 @@ enum ExclusionHMAC {
         return newKey
     }
 
-    private static func loadTag() -> Data? {
+    private enum TagLookup {
+        case found(Data)
+        case missing
+        case failure
+    }
+
+    private static func loadTag() -> TagLookup {
         let query: [CFString: Any] = [
-            kSecClass:       kSecClassGenericPassword,
+            kSecClass: kSecClassGenericPassword,
             kSecAttrService: service,
             kSecAttrAccount: account,
-            kSecReturnData:  true,
-            kSecMatchLimit:  kSecMatchLimitOne,
+            kSecReturnData: true,
+            kSecMatchLimit: kSecMatchLimitOne,
         ]
         var result: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
-
-        if status == errSecSuccess {
-            return result as? Data
-        } else if status != errSecItemNotFound {
-            os_log("Failed to load HMAC tag: %d", log: .default, type: .error, status)
+        if status == errSecSuccess, let data = result as? Data {
+            return .found(data)
         }
-        return nil
+        if status == errSecItemNotFound {
+            return .missing
+        }
+        os_log("Failed to load HMAC tag: %d", log: .default, type: .error, status)
+        return .failure
     }
 
     @discardableResult
@@ -272,8 +279,14 @@ enum ExclusionHMAC {
 
     static func verify(_ ids: Set<String>) -> Bool {
         guard ids.allSatisfy(isValidBundleID), let key = hmacKey() else { return false }
-        guard let storedTag = loadTag() else {
+        let storedTag: Data
+        switch loadTag() {
+        case .found(let tag):
+            storedTag = tag
+        case .missing:
             return ids.isEmpty
+        case .failure:
+            return false
         }
 
         if HMAC<SHA256>.isValidAuthenticationCode(storedTag, authenticating: serialise(ids), using: key) {
@@ -281,7 +294,7 @@ enum ExclusionHMAC {
         }
 
         if HMAC<SHA256>.isValidAuthenticationCode(storedTag, authenticating: legacySerialise(ids), using: key) {
-            store(ids)
+            _ = store(ids)
             return true
         }
 
