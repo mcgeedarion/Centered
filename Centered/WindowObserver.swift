@@ -132,11 +132,21 @@ final class WindowObserver {
             kAXFocusedWindowChangedNotification
         ]
         
+        var registrationFailed = false
         for name in notificationNames {
             let result = AXObserverAddNotification(axObserver, appElement, name as CFString, refconPtr)
             if result != .success {
-                logger.debug("Failed to register notification \(name as String, privacy: .public) for PID \(pid, privacy: .public): result=\(result.rawValue)")
+                registrationFailed = true
+                logger.debug("Failed to register notification \\(name as String, privacy: .public) for PID \\(pid, privacy: .public): result=\\(result.rawValue)")
             }
+        }
+
+        guard !registrationFailed else {
+            // Retry the entire observer with a fresh AXObserver. A partial
+            // registration must not be treated as a successful subscription.
+            ObserverBox.releasePtr(refconPtr)
+            scheduleRetry(forPID: pid)
+            return
         }
 
         addRunLoopSource(for: axObserver)
@@ -205,12 +215,12 @@ final class WindowObserver {
 
     private func removeRunLoopSource(for observer: AXObserver) {
         CFRunLoopRemoveSource(CFRunLoopGetMain(),
-                              AXObserverGetRunLoopSource(observer), .defaultMode)
+                              AXObserverGetRunLoopSource(observer), .commonModes)
     }
 
     func handleWindowEvent(pid: pid_t, notificationName: String) {
         if let id = bundleIDs[pid], excludedBundleIDs.contains(id) {
-            logger.debug("Window event ignored (excluded): \\(id, privacy: .public)")
+            logger.debug("Window event ignored (excluded): \(id, privacy: .public)")
             return
         }
 
@@ -247,7 +257,7 @@ final class WindowObserver {
             }
         }
 
-        logger.debug("No usable window found for AX notification \\(notificationName, privacy: .public)")
+        logger.debug("No usable window found for AX notification \(notificationName, privacy: .public)")
     }
 }
 
