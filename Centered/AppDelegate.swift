@@ -758,7 +758,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
             do {
                 try activate()
             } catch {
-                logger.error("Hot key activation failed for \\(name, privacy: .public): \\(error.localizedDescription, privacy: .public)")
+                logger.error("Hot key activation failed for \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
         }
 
