@@ -11,10 +11,13 @@ final class CenteredUITests: XCTestCase {
     }
 
     @MainActor
-    func testExample() throws {
+    func testApplicationLaunchesAndRemainsRunning() throws {
         let app = XCUIApplication()
         app.launch()
-
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
+        XCTAssertEqual(app.state, .runningForeground)
+        app.terminate()
+        XCTAssertTrue(app.wait(for: .notRunning, timeout: 5))
     }
 
     @MainActor
