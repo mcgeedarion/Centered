@@ -152,11 +152,25 @@ final class MenuController {
     }
 
     func rebuildScreenSection() {
-        rebuildMenu()
+        guard let coordinator, let menu = statusItem?.menu else { return }
+        let separators = menu.items.enumerated().filter { $0.element.isSeparatorItem }.map(\.offset)
+        guard let firstSeparator = separators.first else { rebuildMenu(); return }
+        for _ in 0..<firstSeparator { menu.removeItem(at: 0) }
+        let items = makeScreenItems(coordinator: coordinator)
+        for (index, item) in items.enumerated() { menu.insertItem(item, at: index) }
     }
 
     func rebuildActionsSection() {
-        rebuildMenu()
+        guard let coordinator, let menu = statusItem?.menu else { return }
+        let separators = menu.items.enumerated().filter { $0.element.isSeparatorItem }.map(\.offset)
+        guard separators.count >= 2 else { rebuildMenu(); return }
+        let start = separators[0] + 1
+        let end = separators[1]
+        if end > start {
+            for _ in start..<end { menu.removeItem(at: start) }
+        }
+        let items = makeActionItems(coordinator: coordinator)
+        for (index, item) in items.enumerated() { menu.insertItem(item, at: start + index) }
     }
 
     private func rebuildMenu() {
@@ -503,6 +517,7 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         set {
             centerer.selectedScreen = newValue
             settings.selectedScreenName = newValue?.localizedName
+            settings.selectedScreenID = newValue.flatMap { Self.displayID(for: $0) }
             rebuildMenuSection(.screens)
         }
     }
@@ -715,12 +730,24 @@ final class AppCenteringController: NSObject, AppCoordinating, PreferencesHost {
         }
     }
 
+    private static func displayID(for screen: NSScreen) -> UInt32? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)
+            .flatMap { UInt32(exactly: $0.uint32Value) }
+    }
+
     private func restoreSelectedScreen() {
-        guard let name = settings.selectedScreenName else { return }
-        if let screen = NSScreen.screens.first(where: { $0.localizedName == name }) {
+        if let savedID = settings.selectedScreenID,
+           let screen = NSScreen.screens.first(where: { Self.displayID(for: $0) == savedID }) {
             centerer.selectedScreen = screen
+            return
+        }
+        guard let name = settings.selectedScreenName else { return }
+        let matches = NSScreen.screens.filter { $0.localizedName == name }
+        if matches.count == 1, let screen = matches.first {
+            centerer.selectedScreen = screen
+            settings.selectedScreenID = Self.displayID(for: screen)
         } else {
-            logger.warning("Saved screen '\(name, privacy: .public)' not found; using main screen")
+            logger.warning("Saved display could not be uniquely identified; using main display")
             centerer.selectedScreen = NSScreen.main ?? NSScreen.screens.first
         }
     }
