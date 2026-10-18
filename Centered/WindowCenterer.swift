@@ -174,7 +174,11 @@ final class WindowCenterer {
             if !centerViaAX(window: w) { anyFailed = true }
         }
         if anyFailed {
-            AppleScriptCenterer.centerFrontmostWindow(of: app, in: fallbackScreenFrame())
+            let fallbackWindow = axFocusedWindow(in: el) ?? windows.first
+            AppleScriptCenterer.centerFrontmostWindow(
+                of: app,
+                in: fallbackScreenFrame(for: fallbackWindow)
+            )
         }
     }
 
