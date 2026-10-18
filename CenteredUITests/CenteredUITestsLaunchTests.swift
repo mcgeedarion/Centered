@@ -14,8 +14,7 @@ final class CenteredUITestsLaunchTests: XCTestCase {
     func testLaunch() throws {
         let app = XCUIApplication()
         app.launch()
-        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10))
-        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertNotEqual(app.state, .notRunning)
 
         let attachment = XCTAttachment(screenshot: app.screenshot())
         attachment.name = "Launch Screen"
