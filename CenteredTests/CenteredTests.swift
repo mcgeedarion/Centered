@@ -358,9 +358,29 @@ struct AppleScriptCenteringGeometryTests {
         )
 
         #expect(script.contains("set screenBounds to {1920.0, 40.0, 3120.0, 840.0}"))
+        #expect(script.contains("set screenWidth to item 3 of screenBounds - screenLeft"))
+        #expect(script.contains("set screenHeight to item 4 of screenBounds - screenTop"))
         #expect(script.contains("set newX to screenLeft + (screenWidth - winWidth) / 2"))
         #expect(script.contains("set newY to screenTop + (screenHeight - winHeight) / 2"))
+        #expect(!script.contains("activate"))
         #expect(!script.contains("System Events"))
+    }
+
+    @Test func moveToDisplaySubtractsNonzeroScreenOrigin() {
+        let script = AppleScriptCenterer.generateMoveToScreenScriptForTesting(bundleID: "com.apple.Safari", screenIndex: 1)
+        #expect(script.contains("set screenWidth  to item 3 of screenBounds - item 1 of screenBounds"))
+        #expect(script.contains("set screenHeight to item 4 of screenBounds - item 2 of screenBounds"))
+        #expect(!script.contains("activate"))
+    }
+
+    @Test func indexedFallbackTargetsRequestedWindowWithoutActivatingApp() {
+        let script = AppleScriptCenterer.generateCenteringScriptForTesting(
+            bundleID: "com.apple.Safari",
+            screenFrame: CGRect(x: 1920, y: 40, width: 1200, height: 800),
+            windowIndex: 2
+        )
+        #expect(script.contains("set win to window 2"))
+        #expect(!script.contains("activate"))
     }
 
     @Test func missingScreenFrameUsesSystemEventsFallback() {
