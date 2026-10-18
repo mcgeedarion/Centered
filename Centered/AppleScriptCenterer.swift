@@ -81,7 +81,7 @@ struct AppleScriptCenterer {
     private static func generateCenteringScript(bundleID: String, screenFrame: CGRect?) -> String {
         let screenBoundsSetup: String
         if let frame = screenFrame {
-            screenBoundsSetup = "set screenBounds to {\\(frame.minX), \\(frame.minY), \\(frame.maxX), \\(frame.maxY)}"
+            screenBoundsSetup = "set screenBounds to {\(frame.minX), \(frame.minY), \(frame.maxX), \(frame.maxY)}"
         } else {
             screenBoundsSetup = """
                 tell application "System Events" to tell first desktop
@@ -91,12 +91,12 @@ struct AppleScriptCenterer {
         }
 
         return """
-        tell application id "\\(bundleID)"
+        tell application id "\(bundleID)"
             activate
             try
                 set win to front window
                 set winBounds to bounds of win
-                \\(screenBoundsSetup)
+                \(screenBoundsSetup)
                 set screenLeft to item 1 of screenBounds
                 set screenTop to item 2 of screenBounds
                 set screenWidth to item 3 of screenBounds - screenLeft
