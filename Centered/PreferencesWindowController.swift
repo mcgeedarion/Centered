@@ -16,6 +16,7 @@ private enum PreferencesUIConstants {
     static let bottomPadding: CGFloat = 16
 }
 
+@MainActor
 protocol PreferencesHost: AnyObject {
     var settings: Settings { get }
     func rebindHotKey(to binding: HotKeyBinding)
