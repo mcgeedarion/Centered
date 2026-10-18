@@ -2,20 +2,18 @@
 
 ## Supported Versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+Security fixes are provided for the latest version on the `main` branch and the latest published release. Older releases are unsupported unless explicitly noted in their release notes.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| Version | Supported |
+| ------- | --------- |
+| Latest release | Yes |
+| Latest `main` | Yes |
+| Older releases | No |
 
 ## Reporting a Vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please do not disclose suspected vulnerabilities in a public issue.
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+Use GitHub's private vulnerability reporting feature for this repository if it is enabled. If it is unavailable, contact the repository maintainer privately through their GitHub profile and include the affected version, impact, reproduction steps, and any relevant logs.
+
+You can expect an acknowledgement within seven days. The maintainer will assess severity, work on a fix where appropriate, and coordinate disclosure after a fix or mitigation is available. Please avoid sharing exploit details publicly before coordination is complete.
