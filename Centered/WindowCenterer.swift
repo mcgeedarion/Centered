@@ -386,7 +386,7 @@ final class WindowCenterer {
               let value = raw,
               CFGetTypeID(value) == AXUIElementGetTypeID()
         else { return nil }
-        return AXWindow(value as! AXUIElement)
+        return AXWindow(unsafeBitCast(value, to: AXUIElement.self))
     }
 
     private func axWindows(_ el: AXUIElement) -> [AXWindow]? {
