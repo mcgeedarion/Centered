@@ -268,7 +268,7 @@ final class WindowObserver {
                let value = focusedRaw,
                CFGetTypeID(value) == AXUIElementGetTypeID()
             else { return nil }
-            return value as! AXUIElement
+            return unsafeBitCast(value, to: AXUIElement.self)
         }()
 
         // Focus-change events must use the focused window. Creation events
