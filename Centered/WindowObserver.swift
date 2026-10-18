@@ -137,7 +137,7 @@ final class WindowObserver {
             let result = AXObserverAddNotification(axObserver, appElement, name as CFString, refconPtr)
             if result != .success {
                 registrationFailed = true
-                logger.debug("Failed to register notification \\(name as String, privacy: .public) for PID \\(pid, privacy: .public): result=\\(result.rawValue)")
+                logger.debug("Failed to register notification \(name as String, privacy: .public) for PID \(pid, privacy: .public): result=\(result.rawValue)")
             }
         }
 
@@ -159,8 +159,8 @@ final class WindowObserver {
     }
 
     private func removeObserver(for pid: pid_t) {
-        guard let entry = entries.removeValue(forKey: pid) else { return }
         bundleIDs.removeValue(forKey: pid)
+        guard let entry = entries.removeValue(forKey: pid) else { return }
         removeRunLoopSource(for: entry.box.axObserver)
         ObserverBox.releasePtr(entry.refconPtr)
         
