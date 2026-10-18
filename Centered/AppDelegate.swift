@@ -392,7 +392,7 @@ final class PermissionManager {
         CFNotificationCenterRemoveObserver(
             CFNotificationCenterGetDistributedCenter(),
             Unmanaged.passUnretained(self).toOpaque(),
-            Constants.accessibilityNotification as CFString,
+            CFNotificationName(rawValue: Constants.accessibilityNotification as CFString),
             nil
         )
     }
