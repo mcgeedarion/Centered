@@ -133,9 +133,9 @@ final class WindowCenterer {
     }
 
     private func center(window: AXWindow) {
-        guard window.isMinimized != true,
-              window.isMain      != false
-        else { return }
+        // AXMain is not equivalent to focused/key window. Secondary windows
+        // are valid centering targets and must not be filtered out.
+        guard window.isMinimized != true else { return }
 
         let token = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -169,16 +169,16 @@ final class WindowCenterer {
             return
         }
 
-        var anyFailed = false
-        for w in windows where w.isMinimized != true {
-            if !centerViaAX(window: w) { anyFailed = true }
-        }
-        if anyFailed {
-            let fallbackWindow = axFocusedWindow(in: el) ?? windows.first
-            AppleScriptCenterer.centerFrontmostWindow(
-                of: app,
-                in: fallbackScreenFrame(for: fallbackWindow)
-            )
+        // Keep the array index so a fallback can address the same window,
+        // rather than repeatedly moving the application's unrelated front window.
+        for (index, window) in windows.enumerated() where window.isMinimized != true {
+            if !centerViaAX(window: window) {
+                AppleScriptCenterer.centerWindow(
+                    atIndex: index + 1,
+                    of: app,
+                    in: fallbackScreenFrame(for: window)
+                )
+            }
         }
     }
 
@@ -217,13 +217,10 @@ final class WindowCenterer {
             animationTokens.removeValue(forKey: window)
         }
 
-        if !centerViaAX(window: window),
-           let pid = window.processIdentifier,
-           let app = NSRunningApplication(processIdentifier: pid) {
-            // Never fall back to whichever app happens to be frontmost now.
-            // The event may have originated from a different application.
-            AppleScriptCenterer.centerFrontmostWindow(of: app, in: fallbackScreenFrame(for: window))
-        }
+        // AX failure for an asynchronously reported window must not invoke an
+        // AppleScript command that can only identify the app's front window.
+        // Manual front-window commands have a separate, explicit fallback.
+        _ = centerViaAX(window: window)
     }
 
     nonisolated static func centeredOrigin(windowSize: CGSize, in screenRect: CGRect) -> CGPoint {
