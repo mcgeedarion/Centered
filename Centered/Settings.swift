@@ -5,11 +5,6 @@ import Foundation
 protocol Settings {
     var selectedScreenName: String? { get set }
     var selectedScreenID: UInt32? { get set }
-    var selectedScreenID: UInt32? {
-        get { defaults.selectedScreenID }
-        set { defaults.selectedScreenID = newValue }
-    }
-
     var centerActiveBinding: HotKeyBinding { get set }
     var centerAllBinding: HotKeyBinding { get set }
     var excludedBundleIDs: Set<String> { get set }
@@ -48,6 +43,11 @@ struct DefaultSettings: Settings {
             }
             defaults.selectedScreenName = name
         }
+    }
+
+    var selectedScreenID: UInt32? {
+        get { defaults.selectedScreenID }
+        set { defaults.selectedScreenID = newValue }
     }
 
     var centerActiveBinding: HotKeyBinding {
