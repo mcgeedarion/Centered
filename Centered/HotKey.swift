@@ -298,10 +298,10 @@ final class HotKey {
         }
     }
 
-    func handleCarbonEvent(_ firedID: EventHotKeyID) {
+    func handleCarbonEvent(signature: UInt32, id: UInt32) {
         guard isActive,
-              firedID.signature == hotKeyID.signature,
-              firedID.id == hotKeyID.id
+              signature == hotKeyID.signature,
+              id == hotKeyID.id
         else { return }
         keyDownHandler?()
     }
@@ -325,9 +325,11 @@ private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
     )
     guard status == noErr else { return noErr }
 
+    let signature = firedID.signature
+    let id = firedID.id
     let hotKey = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
     Task { @MainActor [weak hotKey] in
-        hotKey?.handleCarbonEvent(firedID)
+        hotKey?.handleCarbonEvent(signature: signature, id: id)
     }
     return noErr
 }
