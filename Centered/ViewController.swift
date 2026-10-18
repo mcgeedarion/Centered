@@ -73,13 +73,4 @@ class ViewController: NSViewController {
         statusIndicator.contentTintColor = color
     }
 
-    // MARK: - Cleanup
-
-    private func removeNotificationObservers() {
-        let nc = NotificationCenter.default
-        notificationObservers.forEach { observer in
-            nc.removeObserver(observer)
-        }
-        notificationObservers.removeAll()
-    }
 }
