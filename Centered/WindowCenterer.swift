@@ -161,7 +161,7 @@ final class WindowCenterer {
         } else if let win = axWindows(el)?.first {
             center(window: win)
         } else {
-            AppleScriptCenterer.centerFrontmostWindow(of: app)
+            AppleScriptCenterer.centerFrontmostWindow(of: app, in: fallbackScreenFrame())
         }
     }
 
@@ -223,7 +223,7 @@ final class WindowCenterer {
            let app = NSRunningApplication(processIdentifier: pid) {
             // Never fall back to whichever app happens to be frontmost now.
             // The event may have originated from a different application.
-            AppleScriptCenterer.centerFrontmostWindow(of: app)
+            AppleScriptCenterer.centerFrontmostWindow(of: app, in: fallbackScreenFrame(for: window))
         }
     }
 
@@ -344,6 +344,16 @@ final class WindowCenterer {
             return screen
         }
         return selectedScreen ?? NSScreen.main ?? NSScreen.screens.first
+    }
+
+    private func fallbackScreenFrame(for window: AXWindow? = nil) -> CGRect? {
+        if let window,
+           let size = window.size,
+           let position = window.position,
+           let screen = targetScreen(forWindowFrame: CGRect(origin: position, size: size)) {
+            return screen.visibleFrame
+        }
+        return (selectedScreen ?? NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
     }
 
     nonisolated static func isValidAppleScriptBundleID(_ bundleID: String) -> Bool {
