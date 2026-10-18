@@ -42,15 +42,17 @@ struct AppleScriptCenterer {
     /// - Parameters:
     ///   - bundleID: The validated bundle identifier
     ///   - app: The running application to verify and center
-    private static func executeCentering(bundleID: String, app: NSRunningApplication, screenFrame: CGRect?) {
-        guard validateBundleID(bundleID, app: app) else {
-            return
-        }
+    static func centerWindow(atIndex index: Int, of app: NSRunningApplication, in screenFrame: CGRect? = nil) {
+        guard index > 0, let bundleID = app.bundleIdentifier,
+              validateBundleID(bundleID, app: app) else { return }
+        let script = generateCenteringScript(bundleID: bundleID, screenFrame: screenFrame, windowIndex: index)
+        appleScriptQueue.async { executeAppleScript(script, bundleID: bundleID) }
+    }
 
+    private static func executeCentering(bundleID: String, app: NSRunningApplication, screenFrame: CGRect?) {
+        guard validateBundleID(bundleID, app: app) else { return }
         let script = generateCenteringScript(bundleID: bundleID, screenFrame: screenFrame)
-        appleScriptQueue.async {
-            executeAppleScript(script, bundleID: bundleID)
-        }
+        appleScriptQueue.async { executeAppleScript(script, bundleID: bundleID) }
     }
 
     /// Validates both the bundle ID format and that it matches the running process.
@@ -79,6 +81,14 @@ struct AppleScriptCenterer {
     /// - Parameter bundleID: The bundle identifier of the target application
     /// - Returns: The complete AppleScript as a string
     static func generateCenteringScript(bundleID: String, screenFrame: CGRect?) -> String {
+        generateCenteringScript(bundleID: bundleID, screenFrame: screenFrame, windowIndex: nil)
+    }
+
+    private static func generateCenteringScript(
+        bundleID: String,
+        screenFrame: CGRect?,
+        windowIndex: Int?
+    ) -> String {
         let screenBoundsSetup: String
         if let frame = screenFrame {
             screenBoundsSetup = "set screenBounds to {\(frame.minX), \(frame.minY), \(frame.maxX), \(frame.maxY)}"
@@ -93,7 +103,11 @@ struct AppleScriptCenterer {
         return """
         tell application id "\(bundleID)"
             try
-                set win to front window
+                if windowIndex is missing value then
+                    set win to front window
+                else
+                    set win to window windowIndex
+                end if
                 set winBounds to bounds of win
                 \(screenBoundsSetup)
                 set screenLeft to item 1 of screenBounds
