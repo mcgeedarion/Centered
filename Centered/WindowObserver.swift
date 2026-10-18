@@ -185,6 +185,8 @@ final class WindowObserver {
         guard attempts < kMaxRetryAttempts else {
             logger.debug("Max retry attempts reached for PID \(pid, privacy: .public)")
             pendingRetry.removeValue(forKey: pid)
+            missingNotifications.removeValue(forKey: pid)
+            if entries[pid] == nil { bundleIDs.removeValue(forKey: pid) }
             return
         }
         pendingRetry[pid] = attempts + 1
