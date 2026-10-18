@@ -232,8 +232,7 @@ final class HotKey {
     deinit {
         if isActive {
             assertionFailure(
-                "HotKey must be deactivated via deactivate() before deallocation. "
-                + "Current binding: \(binding)"
+                "HotKey must be deactivated via deactivate() before deallocation."
             )
         }
     }
