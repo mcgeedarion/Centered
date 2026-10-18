@@ -370,7 +370,7 @@ final class PermissionManager {
             CFNotificationCenterGetDistributedCenter(),
             selfPtr,
             permissionChangedCallback,
-            CFNotificationName(rawValue: Constants.accessibilityNotification as CFString),
+            Constants.accessibilityNotification as CFString,
             nil,
             .deliverImmediately
         )
