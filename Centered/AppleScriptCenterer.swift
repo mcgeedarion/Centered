@@ -92,7 +92,6 @@ struct AppleScriptCenterer {
 
         return """
         tell application id "\(bundleID)"
-            activate
             try
                 set win to front window
                 set winBounds to bounds of win
@@ -183,8 +182,8 @@ struct AppleScriptCenterer {
                 end tell
                 set winWidth  to item 3 of winBounds - item 1 of winBounds
                 set winHeight to item 4 of winBounds - item 2 of winBounds
-                set screenWidth  to item 3 of screenBounds
-                set screenHeight to item 4 of screenBounds
+                set screenWidth  to item 3 of screenBounds - item 1 of screenBounds
+                set screenHeight to item 4 of screenBounds - item 2 of screenBounds
                 set newX to (item 1 of screenBounds) + (screenWidth  - winWidth)  / 2
                 set newY to (item 2 of screenBounds) + (screenHeight - winHeight) / 2
                 try
