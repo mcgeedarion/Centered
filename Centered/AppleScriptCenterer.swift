@@ -191,7 +191,6 @@ struct AppleScriptCenterer {
     private static func generateMoveToScreenScript(bundleID: String, screenIndex: Int) -> String {
         """
         tell application id "\(bundleID)"
-            activate
             try
                 set win to front window
                 set winBounds to bounds of win
