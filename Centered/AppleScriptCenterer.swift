@@ -30,24 +30,24 @@ struct AppleScriptCenterer {
     /// Centers the frontmost window of the given application using AppleScript.
     /// Falls back to alternative positioning if animation is unsupported.
     /// - Parameter app: The running application whose window should be centered
-    static func centerFrontmostWindow(of app: NSRunningApplication) {
+    static func centerFrontmostWindow(of app: NSRunningApplication, in screenFrame: CGRect? = nil) {
         guard let bundleID = app.bundleIdentifier else {
             appleScriptLogger.debug("AppleScript fallback skipped: no bundle ID for pid \(app.processIdentifier)")
             return
         }
-        executeCentering(bundleID: bundleID, app: app)
+        executeCentering(bundleID: bundleID, app: app, screenFrame: screenFrame)
     }
 
     /// Executes the window centering operation after validating the bundle ID and process.
     /// - Parameters:
     ///   - bundleID: The validated bundle identifier
     ///   - app: The running application to verify and center
-    private static func executeCentering(bundleID: String, app: NSRunningApplication) {
+    private static func executeCentering(bundleID: String, app: NSRunningApplication, screenFrame: CGRect?) {
         guard validateBundleID(bundleID, app: app) else {
             return
         }
 
-        let script = generateCenteringScript(bundleID: bundleID)
+        let script = generateCenteringScript(bundleID: bundleID, screenFrame: screenFrame)
         appleScriptQueue.async {
             executeAppleScript(script, bundleID: bundleID)
         }
@@ -78,27 +78,38 @@ struct AppleScriptCenterer {
     /// Generates the AppleScript code for centering a window.
     /// - Parameter bundleID: The bundle identifier of the target application
     /// - Returns: The complete AppleScript as a string
-    private static func generateCenteringScript(bundleID: String) -> String {
-        """
-        tell application id "\(bundleID)"
+    private static func generateCenteringScript(bundleID: String, screenFrame: CGRect?) -> String {
+        let screenBoundsSetup: String
+        if let frame = screenFrame {
+            screenBoundsSetup = "set screenBounds to {\\(frame.minX), \\(frame.minY), \\(frame.maxX), \\(frame.maxY)}"
+        } else {
+            screenBoundsSetup = """
+                tell application "System Events" to tell first desktop
+                    set screenBounds to bounds
+                end tell
+                """
+        }
+
+        return """
+        tell application id "\\(bundleID)"
             activate
             try
                 set win to front window
                 set winBounds to bounds of win
-                tell application "System Events" to tell first desktop
-                    set screenBounds to bounds
-                    set screenWidth  to item 3 of screenBounds
-                    set screenHeight to item 4 of screenBounds
-                end tell
-                set winWidth  to item 3 of winBounds - item 1 of winBounds
+                \\(screenBoundsSetup)
+                set screenLeft to item 1 of screenBounds
+                set screenTop to item 2 of screenBounds
+                set screenWidth to item 3 of screenBounds - screenLeft
+                set screenHeight to item 4 of screenBounds - screenTop
+                set winWidth to item 3 of winBounds - item 1 of winBounds
                 set winHeight to item 4 of winBounds - item 2 of winBounds
-                set newX to (screenWidth  - winWidth)  / 2
-                set newY to (screenHeight - winHeight) / 2
+                set newX to screenLeft + (screenWidth - winWidth) / 2
+                set newY to screenTop + (screenHeight - winHeight) / 2
                 try
                     set bounds of win to {newX, newY, newX + winWidth, newY + winHeight} with animation
                 on error
                     set position of win to {newX, newY}
-                    set size     of win to {winWidth, winHeight}
+                    set size of win to {winWidth, winHeight}
                 end try
             end try
         end tell
