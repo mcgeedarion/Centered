@@ -158,6 +158,26 @@ enum HotKeyError: LocalizedError {
     }
 }
 
+/// Immutable routing data can be checked synchronously outside the main actor.
+struct HotKeyEventRoute {
+    let signature: UInt32
+    let id: UInt32
+
+    func status(forSignature signature: UInt32, id: UInt32) -> OSStatus {
+        self.signature == signature && self.id == id ? noErr : OSStatus(eventNotHandledErr)
+    }
+}
+
+private final class HotKeyEventContext {
+    let route: HotKeyEventRoute
+    weak var hotKey: HotKey?
+
+    init(hotKey: HotKey, signature: UInt32, id: UInt32) {
+        self.hotKey = hotKey
+        self.route = HotKeyEventRoute(signature: signature, id: id)
+    }
+}
+
 // MARK: - HotKey Class
 @MainActor
 final class HotKey {
@@ -167,8 +187,9 @@ final class HotKey {
 
     private var hotKeyRef:  EventHotKeyRef?
     private var handlerRef: EventHandlerRef?
+    private var handlerContext: HotKeyEventContext?
     private var hotKeyID:   EventHotKeyID
-    private var isActive = false
+    private(set) var isActive = false
 
     init(binding: HotKeyBinding, handler: (() -> Void)? = nil) {
         self.binding        = binding
@@ -203,8 +224,11 @@ final class HotKey {
     /// Rebinds the hot key to a new binding.
     /// - Parameter newBinding: The new `HotKeyBinding` to use.
     /// - Throws: `HotKeyError` if re-registration fails during rebind.
-    func rebind(to newBinding: HotKeyBinding) throws {
-        guard binding != newBinding else { return }
+    func rebind(to newBinding: HotKeyBinding, activateIfNeeded: Bool = false) throws {
+        guard binding != newBinding else {
+            if activateIfNeeded { try activate() }
+            return
+        }
         let oldBinding = binding
         let oldHotKeyID = hotKeyID
         let wasActive = isActive
@@ -216,13 +240,13 @@ final class HotKey {
         binding  = newBinding
         hotKeyID = nextHotKeyID()
 
-        if wasActive {
+        if wasActive || activateIfNeeded {
             do {
                 try activate()
             } catch {
                 binding = oldBinding
                 hotKeyID = oldHotKeyID
-                try? activate()
+                if wasActive { try? activate() }
                 throw error
             }
         }
@@ -247,17 +271,22 @@ final class HotKey {
             eventKind:  OSType(kEventHotKeyPressed)
         )
 
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+        let context = HotKeyEventContext(
+            hotKey: self, signature: hotKeyID.signature, id: hotKeyID.id
+        )
+        handlerContext = context
+        let contextPtr = Unmanaged.passUnretained(context).toOpaque()
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
             carbonHotKeyHandler,
             1, &eventType,
-            selfPtr,
+            contextPtr,
             &handlerRef
         )
 
         guard status == noErr else {
             handlerRef = nil
+            handlerContext = nil
             throw HotKeyError.failedToInstallHandler
         }
     }
@@ -267,6 +296,7 @@ final class HotKey {
             RemoveEventHandler(ref)
             handlerRef = nil
         }
+        handlerContext = nil
     }
 
     private func registerHotKey() throws {
@@ -308,7 +338,7 @@ final class HotKey {
 
 // MARK: - Carbon Event Handler
 private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
-    guard let event, let userData else { return noErr }
+    guard let event, let userData else { return OSStatus(eventNotHandledErr) }
 
     // Read the borrowed Carbon event synchronously. Never capture EventRef past
     // this callback's lifetime or call a MainActor-isolated method off-actor.
@@ -322,11 +352,14 @@ private let carbonHotKeyHandler: EventHandlerUPP = { _, event, userData in
         nil,
         &firedID
     )
-    guard status == noErr else { return noErr }
+    guard status == noErr else { return OSStatus(eventNotHandledErr) }
 
     let signature = firedID.signature
     let id = firedID.id
-    let hotKey = Unmanaged<HotKey>.fromOpaque(userData).takeUnretainedValue()
+    let context = Unmanaged<HotKeyEventContext>.fromOpaque(userData).takeUnretainedValue()
+    let routingStatus = context.route.status(forSignature: signature, id: id)
+    guard routingStatus == noErr else { return routingStatus }
+    guard let hotKey = context.hotKey else { return OSStatus(eventNotHandledErr) }
     Task { @MainActor [weak hotKey] in
         hotKey?.handleCarbonEvent(signature: signature, id: id)
     }
